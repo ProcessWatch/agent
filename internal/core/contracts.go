@@ -28,6 +28,8 @@ type WatchlistManager interface {
 	IncrementFailCount(ctx context.Context, name string) error
 	// Resets the failure count for a watchlist item (e.g., after a successful restart).
 	ResetFailCount(ctx context.Context, name string) error
+	// SetTrackedPID stores the PID for a watchlist entry in memory only (not persisted).
 	SetTrackedPID(ctx context.Context, name string, pid int32) error
+	// GetTrackedPID returns the last known PID for a watchlist entry, or 0 if unset.
 	GetTrackedPID(ctx context.Context, name string) (int32, error)
 }

@@ -13,20 +13,21 @@ import (
 type Logger struct {
 	eventFile io.WriteCloser
 	mutex     sync.Mutex
+	debug     bool
 }
 
-func Start(logPath string) (*Logger, error) {
-	// Lumberjack handles rotation automatically
+func Start(logPath string, logLevel string) (*Logger, error) {
 	logFile := &lumberjack.Logger{
 		Filename:   logPath,
-		MaxSize:    10,   // MB - rotate after 10MB
-		MaxBackups: 5,    // Keep 5 old files
-		MaxAge:     7,    // Days - delete files older than 7 days
-		Compress:   true, // Compress old files with gzip
+		MaxSize:    10,
+		MaxBackups: 5,
+		MaxAge:     7,
+		Compress:   true,
 	}
 
 	return &Logger{
 		eventFile: logFile,
+		debug:     logLevel == "debug",
 	}, nil
 }
 
@@ -36,6 +37,13 @@ func (l *Logger) Info(eventType string, data map[string]interface{}) {
 
 func (l *Logger) Error(eventType string, data map[string]interface{}) {
 	l.log("ERROR", eventType, data)
+}
+
+// Debug logs only when the logger was started with logLevel "debug".
+func (l *Logger) Debug(eventType string, data map[string]interface{}) {
+	if l.debug {
+		l.log("DEBUG", eventType, data)
+	}
 }
 
 func (l *Logger) log(level, eventType string, data map[string]interface{}) {
@@ -49,10 +57,7 @@ func (l *Logger) log(level, eventType string, data map[string]interface{}) {
 		"data":  data,
 	}
 
-	// Write to JSONL file (lumberjack handles rotation)
 	json.NewEncoder(l.eventFile).Encode(event)
-
-	// Print to console for development visibility
 	fmt.Printf("[%s] %s: %v\n", level, eventType, data)
 }
 

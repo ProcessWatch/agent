@@ -2,12 +2,12 @@ module github.com/ethan-mdev/service-watch
 
 go 1.25.3
 
-require gopkg.in/natefinch/lumberjack.v2 v2.2.1
-
 require (
-	golang.org/x/sys v0.37.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
+	gopkg.in/yaml.v3 v3.0.1
 )
+
+require golang.org/x/sys v0.37.0 // indirect
 
 require (
 	github.com/ebitengine/purego v0.9.0 // indirect
