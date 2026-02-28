@@ -16,8 +16,8 @@ type WatchlistManager interface {
 	List(ctx context.Context) ([]WatchlistItem, error)
 	// Gets a specific watchlist item by service name with current service details.
 	Get(ctx context.Context, name string) (WatchlistItem, error)
-	// Adds a service to the watchlist with auto-restart configuration.
-	Add(ctx context.Context, item WatchlistItem, autoRestart bool) error
+	// Adds a process to the watchlist.
+	Add(ctx context.Context, entry WatchlistItem) error
 	// Removes a service from the watchlist.
 	Remove(ctx context.Context, name string) error
 	// Updates the auto-restart setting for a watchlist item.
