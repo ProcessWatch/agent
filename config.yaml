@@ -3,6 +3,3 @@ metricsPort: 9090
 pollIntervalSecs: 5
 restartVerifyDelaySecs: 3   # seconds to wait after restart before checking health
 logLevel: debug              # info | debug
-
-# Discord webhook for failure alerts (leave empty to disable)
-discordWebhook: ""

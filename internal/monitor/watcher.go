@@ -20,7 +20,6 @@ func Start(
 	processMgr core.ProcessManager,
 	log *logger.Logger,
 	statusCh chan<- []core.WatchStatus,
-	discordWebhook string,
 ) {
 	log.Info("watcher_started", map[string]interface{}{
 		"pollIntervalSecs": cfg.PollIntervalSecs,
@@ -35,7 +34,7 @@ func Start(
 	prevState := make(map[string]bool)
 
 	// Run immediately on startup, then on each tick.
-	poll(ctx, cfg, watchlistMgr, processMgr, log, statusCh, discordWebhook, prevState)
+	poll(ctx, cfg, watchlistMgr, processMgr, log, statusCh, prevState)
 
 	for {
 		select {
@@ -43,7 +42,7 @@ func Start(
 			log.Info("watcher_stopped", nil)
 			return
 		case <-ticker.C:
-			poll(ctx, cfg, watchlistMgr, processMgr, log, statusCh, discordWebhook, prevState)
+			poll(ctx, cfg, watchlistMgr, processMgr, log, statusCh, prevState)
 		}
 	}
 }
@@ -55,7 +54,6 @@ func poll(
 	processMgr core.ProcessManager,
 	log *logger.Logger,
 	statusCh chan<- []core.WatchStatus,
-	discordWebhook string,
 	prevState map[string]bool,
 ) {
 	entries, err := watchlistMgr.List(ctx)
@@ -67,7 +65,7 @@ func poll(
 	statuses := make([]core.WatchStatus, 0, len(entries))
 
 	for _, entry := range entries {
-		status := buildStatus(ctx, cfg, entry, watchlistMgr, processMgr, log, discordWebhook)
+		status := buildStatus(ctx, cfg, entry, watchlistMgr, processMgr, log)
 
 		// Log state transitions at info level.
 		wasRunning, seen := prevState[entry.Name]
@@ -108,7 +106,6 @@ func buildStatus(
 	watchlistMgr core.WatchlistManager,
 	processMgr core.ProcessManager,
 	log *logger.Logger,
-	discordWebhook string,
 ) core.WatchStatus {
 	status := core.WatchStatus{Entry: entry}
 
@@ -140,8 +137,6 @@ func buildStatus(
 		})
 		// Disable auto-restart to stop repeated alerting.
 		watchlistMgr.Update(ctx, entry.Name, false)
-		// TODO alerting.SendAlert(discordWebhook, entry)
-		_ = discordWebhook
 		return status
 	}
 

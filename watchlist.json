@@ -1,12 +1,12 @@
 [
   {
-    "name": "notepad",
-    "restartCmd": "notepad.exe",
-    "autoRestart": true,
+    "name": "Notepad.exe",
+    "restartCmd": "Notepad.exe",
+    "autoRestart": false,
     "maxRetries": 3,
     "cooldownSecs": 10,
-    "restartCount": 2,
+    "restartCount": 0,
     "failCount": 0,
-    "lastRestart": "2026-02-28T14:50:17-08:00"
+    "lastRestart": ""
   }
 ]

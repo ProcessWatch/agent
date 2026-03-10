@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -13,12 +12,6 @@ type Config struct {
 	PollIntervalSecs       int    `yaml:"pollIntervalSecs"`
 	RestartVerifyDelaySecs int    `yaml:"restartVerifyDelaySecs"`
 	LogLevel               string `yaml:"logLevel"`
-	DiscordWebhook         string `yaml:"discordWebhook"`
-}
-
-var validWebhookPrefixes = []string{
-	"https://discord.com/api/webhooks/",
-	"https://discordapp.com/api/webhooks/",
 }
 
 // Load reads config from path. If the file does not exist, it writes a default
@@ -55,8 +48,6 @@ pollIntervalSecs: 5
 restartVerifyDelaySecs: 3   # seconds to wait after restart before checking health
 logLevel: info              # info | debug
 
-# Discord webhook for failure alerts (leave empty to disable)
-discordWebhook: ""
 `
 	return os.WriteFile(path, []byte(template), 0644)
 }
@@ -82,18 +73,6 @@ func validate(cfg *Config) error {
 	}
 	if cfg.LogLevel != "info" && cfg.LogLevel != "debug" {
 		return fmt.Errorf("invalid logLevel %q: must be \"info\" or \"debug\"", cfg.LogLevel)
-	}
-	if cfg.DiscordWebhook != "" {
-		valid := false
-		for _, prefix := range validWebhookPrefixes {
-			if strings.HasPrefix(cfg.DiscordWebhook, prefix) {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			return fmt.Errorf("invalid discordWebhook URL: must start with https://discord.com/api/webhooks/ or https://discordapp.com/api/webhooks/")
-		}
 	}
 	return nil
 }

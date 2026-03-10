@@ -14,6 +14,14 @@ type Logger struct {
 	eventFile io.WriteCloser
 	mutex     sync.Mutex
 	debug     bool
+	quiet     bool // suppress stdout (e.g. when TUI owns the terminal)
+}
+
+// SetQuiet suppresses stdout output. Logs still go to the JSONL file.
+func (l *Logger) SetQuiet(q bool) {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+	l.quiet = q
 }
 
 func Start(logPath string, logLevel string) (*Logger, error) {
@@ -58,7 +66,9 @@ func (l *Logger) log(level, eventType string, data map[string]interface{}) {
 	}
 
 	json.NewEncoder(l.eventFile).Encode(event)
-	fmt.Printf("[%s] %s: %v\n", level, eventType, data)
+	if !l.quiet {
+		fmt.Printf("[%s] %s: %v\n", level, eventType, data)
+	}
 }
 
 func (l *Logger) Close() error {

@@ -15,6 +15,7 @@ import (
 	"github.com/ethan-mdev/service-watch/internal/monitor"
 	"github.com/ethan-mdev/service-watch/internal/process"
 	"github.com/ethan-mdev/service-watch/internal/storage"
+	"github.com/ethan-mdev/service-watch/internal/tui"
 )
 
 func main() {
@@ -47,30 +48,37 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Status channel (buffered so watcher never blocks on a slow consumer)
-	statusCh := make(chan []core.WatchStatus, 1)
+	// Status channel — buffer of 4 so the initial poll never drops if the TUI
+	// listener hasn't registered yet.
+	statusCh := make(chan []core.WatchStatus, 4)
 
 	// Watcher
-	go monitor.Start(ctx, cfg, watchlist, processMgr, l, statusCh, cfg.DiscordWebhook)
+	go monitor.Start(ctx, cfg, watchlist, processMgr, l, statusCh)
 
 	if *headless {
+		items, err := watchlist.List(context.Background())
+		if err != nil || len(items) == 0 {
+			fmt.Fprintln(os.Stderr, "No watchlist found. Run without --headless to set up a watchlist using the TUI.")
+			os.Exit(1)
+		}
+
 		l.Info("startup", map[string]interface{}{
 			"mode":            "headless",
 			"metricsEndpoint": fmt.Sprintf("http://localhost:%d/metrics (not yet enabled)", cfg.MetricsPort),
 		})
+		go func() {
+			for range statusCh {
+			}
+		}()
+		<-ctx.Done()
 	} else {
-		// TODO: tui.Run(ctx, statusCh, watchlist, processMgr)
-		l.Info("startup", map[string]interface{}{
-			"mode": "headless (TUI not yet implemented — use --headless)",
-		})
+		l.Info("startup", map[string]interface{}{"mode": "tui"})
+		l.SetQuiet(true) // hand the terminal to the TUI
+		if err := tui.Run(ctx, statusCh, watchlist, processMgr); err != nil {
+			fmt.Fprintf(os.Stderr, "tui error: %v\n", err)
+		}
+		cancel()
 	}
 
-	// Drain status channel so the watcher never blocks until TUI/Prometheus consume it.
-	go func() {
-		for range statusCh {
-		}
-	}()
-
-	<-ctx.Done()
 	l.Info("shutdown", nil)
 }
