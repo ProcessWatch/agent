@@ -12,6 +12,24 @@ import (
 	"github.com/ethan-mdev/service-watch/internal/core"
 )
 
+type pendingAction int
+
+const (
+	actionNone pendingAction = iota
+	actionRemove
+	actionRestart
+)
+
+type confirmation struct {
+	active  bool
+	action  pendingAction
+	name    string
+	message string
+}
+
+func (m ListModel) Width() int  { return m.width }
+func (m ListModel) Height() int { return m.height }
+
 // Messages for cross-model communication
 
 type SwitchToPickerMsg struct{}
@@ -106,6 +124,7 @@ type ListModel struct {
 	watchlist core.WatchlistManager
 	statuses  []core.WatchStatus
 	showDebug bool
+	confirm   confirmation
 	width     int
 	height    int
 }
@@ -154,23 +173,58 @@ func (m ListModel) selectedStatus() (core.WatchStatus, bool) {
 
 func (m ListModel) Update(msg tea.Msg) (ListModel, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok {
+		// When confirmation is active, intercept all keys
+		if m.confirm.active {
+			switch km.String() {
+			case "y":
+				switch m.confirm.action {
+				case actionRemove:
+					m.watchlist.Remove(m.ctx, m.confirm.name)
+					m.confirm = confirmation{}
+				case actionRestart:
+					name := m.confirm.name
+					m.confirm = confirmation{}
+					if s, ok := m.selectedStatus(); ok && s.Entry.Name == name {
+						e := s.Entry
+						return m, func() tea.Msg { return RestartRequestMsg{Entry: e} }
+					}
+				}
+				return m, nil
+			case "n", "esc":
+				m.confirm = confirmation{}
+				return m, nil
+			}
+			return m, nil
+		}
+
 		switch {
 		case key.Matches(km, listKeys.Add):
 			return m, func() tea.Msg { return SwitchToPickerMsg{} }
 
 		case key.Matches(km, listKeys.Remove):
 			if s, ok := m.selectedStatus(); ok {
-				m.watchlist.Remove(m.ctx, s.Entry.Name)
-				// Items will refresh on next watcher tick.
+				m.showDebug = false
+				m.confirm = confirmation{
+					active:  true,
+					action:  actionRemove,
+					name:    s.Entry.Name,
+					message: fmt.Sprintf("Remove \"%s\" from watchlist?", s.Entry.Name),
+				}
 			}
 
 		case key.Matches(km, listKeys.Restart):
 			if s, ok := m.selectedStatus(); ok {
-				entry := s.Entry
-				return m, func() tea.Msg { return RestartRequestMsg{Entry: entry} }
+				m.showDebug = false
+				m.confirm = confirmation{
+					active:  true,
+					action:  actionRestart,
+					name:    s.Entry.Name,
+					message: fmt.Sprintf("Restart \"%s\"?", s.Entry.Name),
+				}
 			}
 
 		case key.Matches(km, listKeys.Debug):
+			m.confirm = confirmation{}
 			m.showDebug = !m.showDebug
 		}
 	}
@@ -187,7 +241,12 @@ func (m ListModel) View() string {
 
 	content := m.list.View()
 
-	if m.showDebug {
+	if m.confirm.active {
+		panel := styleBorder.
+			Width(m.width/3 - 2).
+			Render(m.confirm.message + "\n\n" + styleDim.Render("y to confirm · n/esc to cancel"))
+		content = lipgloss.JoinHorizontal(lipgloss.Top, content, panel)
+	} else if m.showDebug {
 		if s, ok := m.selectedStatus(); ok {
 			e := s.Entry
 			debugText := fmt.Sprintf(

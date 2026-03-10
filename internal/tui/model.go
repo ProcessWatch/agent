@@ -11,7 +11,8 @@ import (
 type activeView int
 
 const (
-	showList activeView = iota
+	showWelcome activeView = iota
+	showList
 	showPicker
 )
 
@@ -40,7 +41,9 @@ type Model struct {
 	ctx        context.Context
 	statusCh   <-chan []core.WatchStatus
 	processMgr core.ProcessManager
+	watchlist  core.WatchlistManager
 	active     activeView
+	welcome    views.WelcomeModel
 	list       views.ListModel
 	picker     views.PickerModel
 }
@@ -55,7 +58,9 @@ func New(
 		ctx:        ctx,
 		statusCh:   statusCh,
 		processMgr: processMgr,
-		active:     showList,
+		watchlist:  watchlist,
+		active:     showWelcome,
+		welcome:    views.NewWelcomeModel(ctx, watchlist),
 		list:       views.NewListModel(ctx, watchlist),
 		picker:     views.NewPickerModel(ctx, processMgr, watchlist),
 	}
@@ -69,6 +74,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
 	case tea.WindowSizeMsg:
+		m.welcome.SetSize(msg.Width, msg.Height)
 		m.list.SetSize(msg.Width, msg.Height)
 		m.picker.SetSize(msg.Width, msg.Height)
 		return m, nil
@@ -79,6 +85,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case views.SwitchToPickerMsg:
 		m.active = showPicker
+		m.picker = views.NewPickerModel(m.ctx, m.processMgr, m.watchlist)
+		m.picker.SetSize(m.list.Width(), m.list.Height())
 		return m, m.picker.Init()
 
 	case views.SwitchToListMsg:
@@ -104,6 +112,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.active {
+	case showWelcome:
+		newWelcome, cmd := m.welcome.Update(msg)
+		m.welcome = newWelcome
+		return m, cmd
 	case showList:
 		newList, cmd := m.list.Update(msg)
 		m.list = newList
@@ -118,8 +130,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
-	if m.active == showPicker {
+	switch m.active {
+	case showWelcome:
+		return m.welcome.View()
+	case showPicker:
 		return m.picker.View()
+	default:
+		return m.list.View()
 	}
-	return m.list.View()
 }

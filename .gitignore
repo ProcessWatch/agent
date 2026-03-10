@@ -9,7 +9,6 @@ dist/
 # Logs and runtime data
 logs/
 
-
 # Dependencies
 .vite/
 node_modules/
@@ -21,3 +20,6 @@ node_modules/
 
 # Go build cache
 go.sum
+
+# Watchlist data
+watchlist.json
