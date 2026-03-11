@@ -104,8 +104,6 @@ Events are logged to `logs/events.jsonl` in structured JSON format. Log rotation
 ```
 service-watch/
 ├── main.go                        # Entry point, CLI flags, wiring
-├── config.yaml                    # Runtime configuration
-├── watchlist.json                 # Persisted watchlist
 ├── screenshots/                   # Screenshots for README 
 └── internal/
     ├── config/config.go           # Config loading and validation
