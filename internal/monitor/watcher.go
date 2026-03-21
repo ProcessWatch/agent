@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/ethan-mdev/service-watch/internal/alerting"
 	"github.com/ethan-mdev/service-watch/internal/config"
 	"github.com/ethan-mdev/service-watch/internal/core"
 	"github.com/ethan-mdev/service-watch/internal/logger"
@@ -20,6 +21,7 @@ func Start(
 	processMgr core.ProcessManager,
 	log *logger.Logger,
 	statusCh chan<- []core.WatchStatus,
+	notifier *alerting.DiscordNotifier,
 ) {
 	log.Info("watcher_started", map[string]interface{}{
 		"pollIntervalSecs": cfg.PollIntervalSecs,
@@ -34,7 +36,7 @@ func Start(
 	prevState := make(map[string]bool)
 
 	// Run immediately on startup, then on each tick.
-	poll(ctx, cfg, watchlistMgr, processMgr, log, statusCh, prevState)
+	poll(ctx, cfg, watchlistMgr, processMgr, log, statusCh, prevState, notifier)
 
 	for {
 		select {
@@ -42,7 +44,7 @@ func Start(
 			log.Info("watcher_stopped", nil)
 			return
 		case <-ticker.C:
-			poll(ctx, cfg, watchlistMgr, processMgr, log, statusCh, prevState)
+			poll(ctx, cfg, watchlistMgr, processMgr, log, statusCh, prevState, notifier)
 		}
 	}
 }
@@ -55,6 +57,7 @@ func poll(
 	log *logger.Logger,
 	statusCh chan<- []core.WatchStatus,
 	prevState map[string]bool,
+	notifier *alerting.DiscordNotifier,
 ) {
 	entries, err := watchlistMgr.List(ctx)
 	if err != nil {
@@ -65,7 +68,7 @@ func poll(
 	statuses := make([]core.WatchStatus, 0, len(entries))
 
 	for _, entry := range entries {
-		status := buildStatus(ctx, cfg, entry, watchlistMgr, processMgr, log)
+		status := buildStatus(ctx, cfg, entry, watchlistMgr, processMgr, log, notifier)
 
 		// Log state transitions at info level.
 		wasRunning, seen := prevState[entry.Name]
@@ -75,11 +78,23 @@ func poll(
 				log.Info("process_up", map[string]interface{}{"name": entry.Name, "pid": status.Process.PID})
 			} else {
 				log.Info("process_down", map[string]interface{}{"name": entry.Name})
+				notifyAlert(ctx, cfg, notifier, log, alerting.Event{
+					Type:         alerting.EventProcessDown,
+					ProcessName:  entry.Name,
+					ProjectLabel: cfg.Alerts.ProjectLabel,
+					Message:      "process is down",
+				})
 			}
 		} else if status.Running && !wasRunning {
 			log.Info("process_up", map[string]interface{}{"name": entry.Name, "pid": status.Process.PID})
 		} else if !status.Running && wasRunning {
 			log.Info("process_down", map[string]interface{}{"name": entry.Name})
+			notifyAlert(ctx, cfg, notifier, log, alerting.Event{
+				Type:         alerting.EventProcessDown,
+				ProcessName:  entry.Name,
+				ProjectLabel: cfg.Alerts.ProjectLabel,
+				Message:      "process transitioned to down",
+			})
 		}
 		prevState[entry.Name] = status.Running
 
@@ -106,6 +121,7 @@ func buildStatus(
 	watchlistMgr core.WatchlistManager,
 	processMgr core.ProcessManager,
 	log *logger.Logger,
+	notifier *alerting.DiscordNotifier,
 ) core.WatchStatus {
 	status := core.WatchStatus{Entry: entry}
 
@@ -134,6 +150,12 @@ func buildStatus(
 			"name":       entry.Name,
 			"failCount":  entry.FailCount,
 			"maxRetries": entry.MaxRetries,
+		})
+		notifyAlert(ctx, cfg, notifier, log, alerting.Event{
+			Type:         alerting.EventProcessMaxRetriesExceeded,
+			ProcessName:  entry.Name,
+			ProjectLabel: cfg.Alerts.ProjectLabel,
+			Message:      "process exceeded max restart retries",
 		})
 		// Disable auto-restart to stop repeated alerting.
 		watchlistMgr.Update(ctx, entry.Name, false)
@@ -169,6 +191,13 @@ func buildStatus(
 			"name":  entry.Name,
 			"error": err.Error(),
 		})
+		notifyAlert(ctx, cfg, notifier, log, alerting.Event{
+			Type:         alerting.EventRestartFailed,
+			ProcessName:  entry.Name,
+			ProjectLabel: cfg.Alerts.ProjectLabel,
+			Message:      "restart command failed",
+			Error:        err.Error(),
+		})
 		watchlistMgr.IncrementFailCount(ctx, entry.Name)
 		return status
 	}
@@ -203,10 +232,38 @@ func buildStatus(
 			return 0
 		}(),
 	})
+	notifyAlert(ctx, cfg, notifier, log, alerting.Event{
+		Type:         alerting.EventRestartSuccess,
+		ProcessName:  entry.Name,
+		ProjectLabel: cfg.Alerts.ProjectLabel,
+		Message:      "restart verified successfully",
+	})
 
 	status.Running = true
 	status.Process = verifiedProc
 	return status
+}
+
+func notifyAlert(
+	ctx context.Context,
+	cfg *config.Config,
+	notifier *alerting.DiscordNotifier,
+	log *logger.Logger,
+	event alerting.Event,
+) {
+	if cfg == nil || !cfg.Alerts.Enabled || notifier == nil {
+		return
+	}
+	if event.ProjectLabel == "" {
+		event.ProjectLabel = cfg.Alerts.ProjectLabel
+	}
+	if err := notifier.Notify(ctx, event); err != nil {
+		log.Error("alert_notify_failed", map[string]interface{}{
+			"event":   string(event.Type),
+			"process": event.ProcessName,
+			"error":   err.Error(),
+		})
+	}
 }
 
 // checkLiveness checks if the process is running using PID pinning with a name-based fallback. Updates the tracked PID if the pinned PID is stale.

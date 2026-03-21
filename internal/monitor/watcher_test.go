@@ -4,11 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ethan-mdev/service-watch/internal/alerting"
 	"github.com/ethan-mdev/service-watch/internal/config"
 	"github.com/ethan-mdev/service-watch/internal/core"
 	"github.com/ethan-mdev/service-watch/internal/logger"
@@ -59,7 +64,7 @@ func TestBuildStatusRunningProcessReturnsRunning(t *testing.T) {
 		},
 	}
 
-	status := buildStatus(ctx, testConfig(), entry, watchlist, processMgr, testLogger(t))
+	status := buildStatus(ctx, testConfig(), entry, watchlist, processMgr, testLogger(t), nil)
 	if !status.Running {
 		t.Fatalf("status.Running = false, want true")
 	}
@@ -85,7 +90,7 @@ func TestBuildStatusAutoRestartDisabled(t *testing.T) {
 		},
 	}
 
-	status := buildStatus(ctx, testConfig(), entry, watchlist, processMgr, testLogger(t))
+	status := buildStatus(ctx, testConfig(), entry, watchlist, processMgr, testLogger(t), nil)
 	if status.Running {
 		t.Fatalf("status.Running = true, want false")
 	}
@@ -110,7 +115,7 @@ func TestBuildStatusMaxRetriesExceededDisablesAutoRestart(t *testing.T) {
 		},
 	}
 
-	status := buildStatus(ctx, testConfig(), entry, watchlist, processMgr, testLogger(t))
+	status := buildStatus(ctx, testConfig(), entry, watchlist, processMgr, testLogger(t), nil)
 	if status.Running {
 		t.Fatalf("status.Running = true, want false")
 	}
@@ -141,7 +146,7 @@ func TestBuildStatusCooldownSkipsRestart(t *testing.T) {
 		},
 	}
 
-	status := buildStatus(ctx, testConfig(), entry, watchlist, processMgr, testLogger(t))
+	status := buildStatus(ctx, testConfig(), entry, watchlist, processMgr, testLogger(t), nil)
 	if !status.InCooldown {
 		t.Fatalf("status.InCooldown = false, want true")
 	}
@@ -168,7 +173,7 @@ func TestBuildStatusRestartFailureIncrementsFailCount(t *testing.T) {
 		restartErr: errors.New("boom"),
 	}
 
-	status := buildStatus(ctx, testConfig(), entry, watchlist, processMgr, testLogger(t))
+	status := buildStatus(ctx, testConfig(), entry, watchlist, processMgr, testLogger(t), nil)
 	if status.Running {
 		t.Fatalf("status.Running = true, want false")
 	}
@@ -194,7 +199,7 @@ func TestBuildStatusRestartVerifyFailureIncrementsFailCount(t *testing.T) {
 		},
 	}
 
-	status := buildStatus(ctx, testConfig(), entry, watchlist, processMgr, testLogger(t))
+	status := buildStatus(ctx, testConfig(), entry, watchlist, processMgr, testLogger(t), nil)
 	if status.Running {
 		t.Fatalf("status.Running = true, want false")
 	}
@@ -223,7 +228,7 @@ func TestBuildStatusRestartSuccessUpdatesState(t *testing.T) {
 		},
 	}
 
-	status := buildStatus(ctx, testConfig(), entry, watchlist, processMgr, testLogger(t))
+	status := buildStatus(ctx, testConfig(), entry, watchlist, processMgr, testLogger(t), nil)
 	if !status.Running {
 		t.Fatalf("status.Running = false, want true")
 	}
@@ -245,6 +250,96 @@ func TestBuildStatusRestartSuccessUpdatesState(t *testing.T) {
 	}
 	if pinned != 99 {
 		t.Fatalf("tracked pid = %d, want 99", pinned)
+	}
+}
+
+func TestBuildStatusRestartFailedSendsAlertWhenEnabled(t *testing.T) {
+	t.Parallel()
+
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_, _ = io.ReadAll(r.Body)
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	notifier, err := alerting.NewDiscordNotifier(srv.URL)
+	if err != nil {
+		t.Fatalf("NewDiscordNotifier() returned error: %v", err)
+	}
+	defer notifier.Close()
+
+	ctx := context.Background()
+	watchlist := newFakeWatchlist()
+	entry := testWatchEntry("svc-restart-fail-alert", true)
+	watchlist.items[entry.Name] = entry
+
+	processMgr := &fakeProcessManager{
+		findQueues: map[string][][]core.Process{
+			entry.Name: {{}},
+		},
+		restartErr: errors.New("boom"),
+	}
+
+	cfg := testConfig()
+	cfg.Alerts.Enabled = true
+	cfg.Alerts.ProjectLabel = "test-project"
+
+	_ = buildStatus(ctx, cfg, entry, watchlist, processMgr, testLogger(t), notifier)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&hits) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if got := atomic.LoadInt32(&hits); got == 0 {
+		t.Fatalf("expected at least 1 alert webhook hit, got %d", got)
+	}
+}
+
+func TestBuildStatusRestartFailedDoesNotSendAlertWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_, _ = io.ReadAll(r.Body)
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	notifier, err := alerting.NewDiscordNotifier(srv.URL)
+	if err != nil {
+		t.Fatalf("NewDiscordNotifier() returned error: %v", err)
+	}
+	defer notifier.Close()
+
+	ctx := context.Background()
+	watchlist := newFakeWatchlist()
+	entry := testWatchEntry("svc-restart-fail-no-alert", true)
+	watchlist.items[entry.Name] = entry
+
+	processMgr := &fakeProcessManager{
+		findQueues: map[string][][]core.Process{
+			entry.Name: {{}},
+		},
+		restartErr: errors.New("boom"),
+	}
+
+	cfg := testConfig()
+	cfg.Alerts.Enabled = false
+
+	_ = buildStatus(ctx, cfg, entry, watchlist, processMgr, testLogger(t), notifier)
+	time.Sleep(100 * time.Millisecond)
+
+	if got := atomic.LoadInt32(&hits); got != 0 {
+		t.Fatalf("expected 0 alert webhook hits when disabled, got %d", got)
 	}
 }
 

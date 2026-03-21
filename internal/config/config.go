@@ -57,9 +57,9 @@ pollIntervalSecs: 5
 restartVerifyDelaySecs: 3   # seconds to wait after restart before checking health
 logLevel: info              # info | debug
 alerts:
-	enabled: false
-	discordWebhookURL: ""     # ex: https://discord.com/api/webhooks/<id>/<token>
-	projectLabel: "service-watch"
+  enabled: false
+  discordWebhookURL: ""     # ex: https://discord.com/api/webhooks/<id>/<token>
+  projectLabel: "service-watch"
 
 `
 	return os.WriteFile(path, []byte(template), 0644)

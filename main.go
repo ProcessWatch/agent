@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/ethan-mdev/service-watch/internal/alerting"
 	"github.com/ethan-mdev/service-watch/internal/config"
 	"github.com/ethan-mdev/service-watch/internal/core"
 	"github.com/ethan-mdev/service-watch/internal/logger"
@@ -44,6 +45,15 @@ func main() {
 	watchlist := storage.NewJSONWatchlist("watchlist.json")
 	processMgr := process.NewProcessManager()
 
+	var discordNotifier *alerting.DiscordNotifier
+	if cfg.Alerts.Enabled {
+		discordNotifier, err = alerting.NewDiscordNotifier(cfg.Alerts.DiscordWebhookURL)
+		if err != nil {
+			log.Fatalf("failed to initialize discord alerts: %v", err)
+		}
+		defer discordNotifier.Close()
+	}
+
 	// Context wired to OS signals
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -53,7 +63,7 @@ func main() {
 	statusCh := make(chan []core.WatchStatus, 4)
 
 	// Watcher
-	go monitor.Start(ctx, cfg, watchlist, processMgr, l, statusCh)
+	go monitor.Start(ctx, cfg, watchlist, processMgr, l, statusCh, discordNotifier)
 
 	if *headless {
 		items, err := watchlist.List(context.Background())
