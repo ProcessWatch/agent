@@ -2,16 +2,24 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 
 	"gopkg.in/yaml.v3"
 )
 
+type AlertsConfig struct {
+	Enabled           bool   `yaml:"enabled"`
+	DiscordWebhookURL string `yaml:"discordWebhookURL"`
+	ProjectLabel      string `yaml:"projectLabel"`
+}
+
 type Config struct {
-	MetricsPort            int    `yaml:"metricsPort"`
-	PollIntervalSecs       int    `yaml:"pollIntervalSecs"`
-	RestartVerifyDelaySecs int    `yaml:"restartVerifyDelaySecs"`
-	LogLevel               string `yaml:"logLevel"`
+	MetricsPort            int          `yaml:"metricsPort"`
+	PollIntervalSecs       int          `yaml:"pollIntervalSecs"`
+	RestartVerifyDelaySecs int          `yaml:"restartVerifyDelaySecs"`
+	LogLevel               string       `yaml:"logLevel"`
+	Alerts                 AlertsConfig `yaml:"alerts"`
 }
 
 // Load reads config from path. If the file does not exist, it writes a default
@@ -33,6 +41,7 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
+	applyDefaults(&cfg)
 
 	if err := validate(&cfg); err != nil {
 		return nil, err
@@ -47,6 +56,10 @@ metricsPort: 9090
 pollIntervalSecs: 5
 restartVerifyDelaySecs: 3   # seconds to wait after restart before checking health
 logLevel: info              # info | debug
+alerts:
+	enabled: false
+	discordWebhookURL: ""     # ex: https://discord.com/api/webhooks/<id>/<token>
+	projectLabel: "service-watch"
 
 `
 	return os.WriteFile(path, []byte(template), 0644)
@@ -58,6 +71,17 @@ func defaultConfig() *Config {
 		PollIntervalSecs:       5,
 		RestartVerifyDelaySecs: 3,
 		LogLevel:               "info",
+		Alerts: AlertsConfig{
+			Enabled:           false,
+			DiscordWebhookURL: "",
+			ProjectLabel:      "service-watch",
+		},
+	}
+}
+
+func applyDefaults(cfg *Config) {
+	if cfg.Alerts.ProjectLabel == "" {
+		cfg.Alerts.ProjectLabel = "service-watch"
 	}
 }
 
@@ -73,6 +97,15 @@ func validate(cfg *Config) error {
 	}
 	if cfg.LogLevel != "info" && cfg.LogLevel != "debug" {
 		return fmt.Errorf("invalid logLevel %q: must be \"info\" or \"debug\"", cfg.LogLevel)
+	}
+	if cfg.Alerts.Enabled {
+		if cfg.Alerts.DiscordWebhookURL == "" {
+			return fmt.Errorf("invalid alerts.discordWebhookURL: must be set when alerts.enabled is true")
+		}
+		u, err := url.Parse(cfg.Alerts.DiscordWebhookURL)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("invalid alerts.discordWebhookURL: must be a valid http/https URL")
+		}
 	}
 	return nil
 }
