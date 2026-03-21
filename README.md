@@ -76,8 +76,12 @@ Press `a` to open the process picker, which lists all running system processes. 
 ```yaml
 metricsPort: 9090
 pollIntervalSecs: 5
-restartVerifyDelaySecs: 3
+restartVerifyDelaySecs: 3   # seconds to wait after restart before checking health
 logLevel: info              # info | debug
+alerts:
+  enabled: false
+  discordWebhookURL: ""     # ex: https://discord.com/api/webhooks/<id>/<token>
+  projectLabel: "service-watch"
 ```
 
 | Option | Description | Default |
