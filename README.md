@@ -161,17 +161,15 @@ service-watch/
 
 ## Roadmap
 
-### v2.2 — Prometheus Metrics Endpoint
-Expose process and host metrics at `/metrics` for scraping.
-
-### v2.3 — TUI Log Viewer
+### v2.2 — TUI log viewer
 Tail and filter structured logs directly within the TUI.
 
-### v2.4 — Config Hot-Reload
+### v2.3 — Config Hot-Reload
 Pick up `config.yaml` changes without restarting the application.
 
-### v3 — Advanced TUI
-Multi-stage failure policies, process grouping/tagging, and real-time/historical charts for process resource data.
+### v2.4 — Multi-stage failure policies, process grouping/tagging
+
+### v3.0 — Remote reporting + web dashboard
 
 ## License
 
