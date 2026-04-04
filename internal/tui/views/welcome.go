@@ -87,7 +87,7 @@ func (m WelcomeModel) View() string {
 		return "loading..."
 	}
 
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("62")).Render("ProcessWatch")
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#a78bfa")).Render("ProcessWatch")
 
 	var body string
 	if m.count == 0 {

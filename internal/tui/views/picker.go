@@ -74,6 +74,7 @@ type PickerModel struct {
 
 func NewPickerModel(ctx context.Context, processMgr core.ProcessManager, watchlist core.WatchlistManager) PickerModel {
 	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	l.Styles.Title = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#a78bfa"))
 	l.Title = "Select a process to watch  (/ to filter)"
 	l.SetShowStatusBar(true)
 	return PickerModel{
@@ -246,7 +247,7 @@ func (m PickerModel) formView() string {
 	b.WriteString(styleBold.Render(fmt.Sprintf(`Add "%s" to watchlist`, m.selected.Name)))
 	b.WriteString("\n\n")
 
-	activeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
+	activeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a78bfa")).Bold(true)
 
 	for i := range fieldCount {
 		label := fieldLabels[i]

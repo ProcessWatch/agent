@@ -46,7 +46,7 @@ var (
 	styleBold     = lipgloss.NewStyle().Bold(true)
 	styleBorder   = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("62")).
+			BorderForeground(lipgloss.Color("#a78bfa")).
 			Padding(0, 1)
 )
 
@@ -131,6 +131,7 @@ type ListModel struct {
 
 func NewListModel(ctx context.Context, watchlist core.WatchlistManager) ListModel {
 	l := list.New([]list.Item{}, statusDelegate{}, 0, 0)
+	l.Styles.Title = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#a78bfa"))
 	l.Title = "ProcessWatch"
 	l.SetShowStatusBar(true)
 	l.SetFilteringEnabled(false)
