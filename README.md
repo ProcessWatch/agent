@@ -1,5 +1,5 @@
 # ProcessWatch
-![version](https://img.shields.io/badge/version-2.0-blue)
+![version](https://img.shields.io/badge/version-2.2-blue)
 ![go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)
 ![platform](https://img.shields.io/badge/platform-Windows%20|%20Linux%20|%20macOS-lightgrey)
 ![license](https://img.shields.io/badge/license-MIT-green)
@@ -15,9 +15,10 @@ A cross-platform process monitor with auto-restart capabilities, a terminal UI d
 - **Auto-Restart** — Automatically restart crashed processes with configurable cooldowns and retry limits
 - **PID Pinning** — Tracks processes by PID with name-based fallback for reliable liveness detection
 - **Process Picker** — Browse and filter all running system processes to add to your watchlist
+- **Event Log Viewer** — Browse and filter structured logs directly within the TUI
 - **Structured Logging** — JSONL event log with automatic rotation (10MB max, 5 backups, 7-day retention)
 - **Cross-Platform** — Works on Windows, Linux, and macOS
-- **Discord Alerts** — Optional Discord webhook feature to send alerts on process status change
+- **Discord Alerts** — Optional Discord webhook alerts on process status change
 
 ## Quick Start
 
@@ -57,6 +58,7 @@ Or run in headless/daemon mode:
 | `d` | Remove selected process (with confirmation) |
 | `r` | Restart selected process (with confirmation) |
 | `v` | Toggle debug info panel |
+| `e` | Open event log viewer |
 | `q` | Quit |
 
 On startup, the TUI will prompt you to load an existing watchlist or start fresh.
@@ -68,6 +70,10 @@ On startup, the TUI will prompt you to load an existing watchlist or start fresh
 Press `a` to open the process picker, which lists all running system processes. Use `/` to filter. Select a process and configure its restart command, max retries, cooldown, and auto-restart setting.
 
 ![TUI Add Screen](screenshots/add.png)
+
+### Event Log Viewer
+
+Press `e` from the main dashboard to open the event log viewer. All events from the current log file are loaded on open. Use `/` to filter by event type, process name, or any data field. Press `q` to return to the dashboard.
 
 ### Configuration
 
@@ -95,7 +101,7 @@ alerts:
 
 ProcessWatch can send real-time alerts to a Discord channel when monitored processes crash, fail to restart, or recover. Alerts are sent asynchronously and do not block the monitoring loop.
 
-To enable alerts, edit the `alerts` section on your `config.yaml`:
+To enable alerts, edit the `alerts` section in `config.yaml`:
 
 ```yaml
 alerts:
@@ -108,7 +114,7 @@ alerts:
 |--------|-------------|----------|
 | `enabled` | Enable/disable Discord alerting | Yes |
 | `discordWebhookURL` | Discord webhook URL for alert delivery | Yes (if enabled) |
-| `projectLabel` | Project label displayed in alert messages | No (defaults to `process-watch`) |
+| `projectLabel` | Label displayed in alert messages | No (defaults to `process-watch`) |
 
 **Webhook URL:** Create a Discord webhook in your server's channel settings, then copy the full URL.
 
@@ -117,8 +123,6 @@ alerts:
 - Restart command failed to execute
 - Max retries exceeded (process permanently stopped)
 - Restart verified successful (process recovered)
-
-**Message Format:**
 
 ![Discord Alert Example](screenshots/discord-alert-example.png)
 
@@ -140,7 +144,7 @@ Events are logged to `logs/events.jsonl` in structured JSON format. Log rotation
 ```
 process-watch/
 ├── main.go                        # Entry point, CLI flags, wiring
-├── screenshots/                   # Screenshots for README 
+├── screenshots/                   # Screenshots for README
 └── internal/
     ├── config/config.go           # Config loading and validation
     ├── core/
@@ -156,13 +160,11 @@ process-watch/
         └── views/
             ├── welcome.go         # Startup screen
             ├── list.go            # Main dashboard view
-            └── picker.go          # Process picker and add form
+            ├── picker.go          # Process picker and add form
+            └── logs.go            # Event log viewer
 ```
 
 ## Roadmap
-
-### v2.2 — TUI log viewer
-Tail and filter structured logs directly within the TUI.
 
 ### v2.3 — Config Hot-Reload
 Pick up `config.yaml` changes without restarting the application.
