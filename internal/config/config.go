@@ -70,7 +70,7 @@ func defaultConfig() *Config {
 		MetricsPort:            9090,
 		PollIntervalSecs:       5,
 		RestartVerifyDelaySecs: 3,
-		LogLevel:               "info",
+		LogLevel:               "debug",
 		Alerts: AlertsConfig{
 			Enabled:           false,
 			DiscordWebhookURL: "",

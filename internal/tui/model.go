@@ -14,6 +14,7 @@ const (
 	showWelcome activeView = iota
 	showList
 	showPicker
+	showLogs
 )
 
 // StatusUpdateMsg carries the latest watcher snapshot.
@@ -46,6 +47,7 @@ type Model struct {
 	welcome    views.WelcomeModel
 	list       views.ListModel
 	picker     views.PickerModel
+	logs       views.LogsModel
 }
 
 func New(
@@ -63,6 +65,7 @@ func New(
 		welcome:    views.NewWelcomeModel(ctx, watchlist),
 		list:       views.NewListModel(ctx, watchlist),
 		picker:     views.NewPickerModel(ctx, processMgr, watchlist),
+		logs:       views.NewLogsModel("logs/events.jsonl"),
 	}
 }
 
@@ -77,6 +80,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.welcome.SetSize(msg.Width, msg.Height)
 		m.list.SetSize(msg.Width, msg.Height)
 		m.picker.SetSize(msg.Width, msg.Height)
+		m.logs.SetSize(msg.Width, msg.Height)
 		return m, nil
 
 	case StatusUpdateMsg:
@@ -93,6 +97,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.active = showList
 		return m, nil
 
+	case views.SwitchToLogsMsg:
+		m.active = showLogs
+		m.logs.SetSize(m.list.Width(), m.list.Height())
+		m.logs.Load()
+		return m, nil
+
 	case views.RestartRequestMsg:
 		entry := msg.Entry
 		return m, func() tea.Msg {
@@ -101,13 +111,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case RestartResultMsg:
-		// Watcher will detect the state change on the next tick — no extra action needed.
 		return m, nil
 
 	case tea.KeyMsg:
-		// q quits only from the list view; picker handles its own esc/q.
 		if msg.String() == "q" && m.active == showList {
 			return m, tea.Quit
+		}
+		if msg.String() == "e" && m.active == showList {
+			return m, func() tea.Msg { return views.SwitchToLogsMsg{} }
 		}
 	}
 
@@ -124,6 +135,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		newPicker, cmd := m.picker.Update(msg)
 		m.picker = newPicker
 		return m, cmd
+	case showLogs:
+		newLogs, cmd := m.logs.Update(msg)
+		m.logs = newLogs
+		return m, cmd
 	}
 
 	return m, nil
@@ -135,6 +150,8 @@ func (m Model) View() string {
 		return m.welcome.View()
 	case showPicker:
 		return m.picker.View()
+	case showLogs:
+		return m.logs.View()
 	default:
 		return m.list.View()
 	}

@@ -34,15 +34,16 @@ func (m ListModel) Height() int { return m.height }
 
 type SwitchToPickerMsg struct{}
 type SwitchToListMsg struct{}
+type SwitchToLogsMsg struct{}
 type RestartRequestMsg struct{ Entry core.WatchlistItem }
 
 // Styles
 
 var (
-	styleRunning  = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // bright green
-	styleStopped  = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // bright red
-	styleCooldown = lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // bright yellow
-	styleDim      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))  // grey
+	styleRunning  = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	styleStopped  = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	styleCooldown = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	styleDim      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	styleBold     = lipgloss.NewStyle().Bold(true)
 	styleBorder   = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -107,6 +108,7 @@ type listKeyMap struct {
 	Remove  key.Binding
 	Restart key.Binding
 	Debug   key.Binding
+	Logs    key.Binding
 }
 
 var listKeys = listKeyMap{
@@ -114,6 +116,7 @@ var listKeys = listKeyMap{
 	Remove:  key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "remove")),
 	Restart: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart")),
 	Debug:   key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "debug info")),
+	Logs:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "events")),
 }
 
 // ListModel
@@ -135,12 +138,11 @@ func NewListModel(ctx context.Context, watchlist core.WatchlistManager) ListMode
 	l.Title = "ProcessWatch"
 	l.SetShowStatusBar(true)
 	l.SetFilteringEnabled(false)
-	// Disable built-in quit so the parent model owns it.
 	l.KeyMap.Quit = key.NewBinding()
 	l.KeyMap.ShowFullHelp = key.NewBinding()
 	l.KeyMap.CloseFullHelp = key.NewBinding()
 	l.AdditionalShortHelpKeys = func() []key.Binding {
-		return []key.Binding{listKeys.Add, listKeys.Remove, listKeys.Restart, listKeys.Debug}
+		return []key.Binding{listKeys.Add, listKeys.Remove, listKeys.Restart, listKeys.Debug, listKeys.Logs}
 	}
 	return ListModel{
 		ctx:       ctx,
@@ -174,7 +176,6 @@ func (m ListModel) selectedStatus() (core.WatchStatus, bool) {
 
 func (m ListModel) Update(msg tea.Msg) (ListModel, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok {
-		// When confirmation is active, intercept all keys
 		if m.confirm.active {
 			switch km.String() {
 			case "y":
@@ -227,6 +228,9 @@ func (m ListModel) Update(msg tea.Msg) (ListModel, tea.Cmd) {
 		case key.Matches(km, listKeys.Debug):
 			m.confirm = confirmation{}
 			m.showDebug = !m.showDebug
+
+		case key.Matches(km, listKeys.Logs):
+			return m, func() tea.Msg { return SwitchToLogsMsg{} }
 		}
 	}
 
