@@ -103,6 +103,7 @@ func (pm *ProcessManager) Restart(ctx context.Context, restartCmd string) error 
 		cmd = exec.CommandContext(ctx, "cmd", "/c", restartCmd)
 	} else {
 		cmd = exec.CommandContext(ctx, "sh", "-c", restartCmd)
+		cmd.SysProcAttr = detachAttr()
 	}
 
 	if out, err := cmd.CombinedOutput(); err != nil {

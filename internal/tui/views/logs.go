@@ -106,6 +106,14 @@ func NewLogsModel(logPath string) LogsModel {
 	l.KeyMap.Quit = key.NewBinding()
 	l.KeyMap.ShowFullHelp = key.NewBinding()
 	l.KeyMap.CloseFullHelp = key.NewBinding()
+	l.AdditionalShortHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			key.NewBinding(
+				key.WithKeys("q"),
+				key.WithHelp("q", "back"),
+			),
+		}
+	}
 	l.Filter = func(term string, targets []string) []list.Rank {
 		var ranks []list.Rank
 		for i, t := range targets {

@@ -33,18 +33,18 @@ type pickerErrMsg string
 // --- Form field indices ---
 
 const (
-	fieldRestartCmd = iota
+	fieldAutoRestart = iota
+	fieldRestartCmd
 	fieldMaxRetries
 	fieldCooldownSecs
-	fieldAutoRestart
 	fieldCount
 )
 
 var fieldLabels = [fieldCount]string{
+	"Auto-restart        ",
 	"Restart command     ",
 	"Max retries         ",
 	"Cooldown (secs)     ",
-	"Auto-restart        ",
 }
 
 // --- Picker stages ---
@@ -114,12 +114,12 @@ func (m PickerModel) initForm() PickerModel {
 		return t
 	}
 
-	m.inputs[fieldRestartCmd] = newInput("e.g. notepad.exe", m.selected.Name, 256)
+	m.inputs[fieldAutoRestart] = newInput("false", "false", 5)
+	m.inputs[fieldRestartCmd] = newInput("e.g. systemctl restart my-service", "", 256)
 	m.inputs[fieldMaxRetries] = newInput("5", "5", 3)
 	m.inputs[fieldCooldownSecs] = newInput("10", "10", 4)
-	m.inputs[fieldAutoRestart] = newInput("true", "true", 5)
 
-	m.focused = fieldRestartCmd
+	m.focused = fieldAutoRestart
 	m.inputs[m.focused].Focus()
 	m.stage = stageForm
 	m.err = ""
@@ -176,20 +176,27 @@ func (m PickerModel) updateForm(msg tea.KeyMsg) (PickerModel, tea.Cmd) {
 	case "esc":
 		m.stage = stagePicking
 		return m, nil
+	case " ", "left", "right":
+		if m.focused == fieldAutoRestart {
+			m.toggleAutoRestart()
+			m.err = ""
+			return m, nil
+		}
 	case "tab", "down":
 		m.inputs[m.focused].Blur()
-		m.focused = (m.focused + 1) % fieldCount
+		m.focused = nextVisibleField(m.visibleFields(), m.focused)
 		m.inputs[m.focused].Focus()
 		return m, nil
 	case "shift+tab", "up":
 		m.inputs[m.focused].Blur()
-		m.focused = (m.focused - 1 + fieldCount) % fieldCount
+		m.focused = previousVisibleField(m.visibleFields(), m.focused)
 		m.inputs[m.focused].Focus()
 		return m, nil
 	case "enter":
-		if m.focused < fieldCount-1 {
+		fields := m.visibleFields()
+		if m.focused != fields[len(fields)-1] {
 			m.inputs[m.focused].Blur()
-			m.focused++
+			m.focused = nextVisibleField(fields, m.focused)
 			m.inputs[m.focused].Focus()
 			return m, nil
 		}
@@ -204,7 +211,13 @@ func (m PickerModel) updateForm(msg tea.KeyMsg) (PickerModel, tea.Cmd) {
 func (m PickerModel) submitForm() (PickerModel, tea.Cmd) {
 	maxRetries, _ := strconv.Atoi(strings.TrimSpace(m.inputs[fieldMaxRetries].Value()))
 	cooldownSecs, _ := strconv.Atoi(strings.TrimSpace(m.inputs[fieldCooldownSecs].Value()))
-	autoRestart := strings.EqualFold(strings.TrimSpace(m.inputs[fieldAutoRestart].Value()), "true")
+	autoRestart := m.autoRestartEnabled()
+	restartCmd := strings.TrimSpace(m.inputs[fieldRestartCmd].Value())
+
+	if autoRestart && restartCmd == "" {
+		m.err = "restart command is required when auto-restart is enabled"
+		return m, nil
+	}
 
 	if maxRetries <= 0 {
 		maxRetries = 5
@@ -215,7 +228,7 @@ func (m PickerModel) submitForm() (PickerModel, tea.Cmd) {
 
 	entry := core.WatchlistItem{
 		Name:         m.selected.Name,
-		RestartCmd:   strings.TrimSpace(m.inputs[fieldRestartCmd].Value()),
+		RestartCmd:   restartCmd,
 		AutoRestart:  autoRestart,
 		MaxRetries:   maxRetries,
 		CooldownSecs: cooldownSecs,
@@ -249,13 +262,21 @@ func (m PickerModel) formView() string {
 
 	activeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a78bfa")).Bold(true)
 
-	for i := range fieldCount {
+	for _, i := range m.visibleFields() {
 		label := fieldLabels[i]
 		if i == m.focused {
 			b.WriteString(activeStyle.Render(label+": ") + m.inputs[i].View())
 		} else {
 			b.WriteString(styleDim.Render(label+": ") + m.inputs[i].View())
 		}
+		b.WriteString("\n\n")
+	}
+
+	if !m.autoRestartEnabled() {
+		b.WriteString(styleDim.Render("Auto-restart is off. ProcessWatch will monitor this process and report incidents without running a recovery command."))
+		b.WriteString("\n\n")
+	} else {
+		b.WriteString(styleDim.Render("Use a command that works from a plain shell and returns after starting/restarting the service."))
 		b.WriteString("\n\n")
 	}
 
@@ -267,4 +288,41 @@ func (m PickerModel) formView() string {
 	b.WriteString(styleDim.Render("tab/↑↓ navigate · enter next/confirm · esc back"))
 
 	return styleBorder.Width(m.width - 4).Render(b.String())
+}
+
+func (m PickerModel) autoRestartEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(m.inputs[fieldAutoRestart].Value()), "true")
+}
+
+func (m *PickerModel) toggleAutoRestart() {
+	if m.autoRestartEnabled() {
+		m.inputs[fieldAutoRestart].SetValue("false")
+		return
+	}
+	m.inputs[fieldAutoRestart].SetValue("true")
+}
+
+func (m PickerModel) visibleFields() []int {
+	if !m.autoRestartEnabled() {
+		return []int{fieldAutoRestart}
+	}
+	return []int{fieldAutoRestart, fieldRestartCmd, fieldMaxRetries, fieldCooldownSecs}
+}
+
+func nextVisibleField(fields []int, current int) int {
+	for i, field := range fields {
+		if field == current {
+			return fields[(i+1)%len(fields)]
+		}
+	}
+	return fields[0]
+}
+
+func previousVisibleField(fields []int, current int) int {
+	for i, field := range fields {
+		if field == current {
+			return fields[(i-1+len(fields))%len(fields)]
+		}
+	}
+	return fields[0]
 }

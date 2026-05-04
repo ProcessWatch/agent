@@ -4,16 +4,15 @@ import (
 	"context"
 	"time"
 
-	"github.com/ethan-mdev/process-watch/internal/alerting"
 	"github.com/ethan-mdev/process-watch/internal/config"
 	"github.com/ethan-mdev/process-watch/internal/core"
 	"github.com/ethan-mdev/process-watch/internal/logger"
+	"github.com/ethan-mdev/process-watch/internal/reporting"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/mem"
 	gopsprocess "github.com/shirou/gopsutil/v4/process"
 )
 
-// Start begins the monitor loop that periodically checks the status of watchlist entries
 func Start(
 	ctx context.Context,
 	cfg *config.Config,
@@ -21,7 +20,7 @@ func Start(
 	processMgr core.ProcessManager,
 	log *logger.Logger,
 	statusCh chan<- []core.WatchStatus,
-	notifier *alerting.DiscordNotifier,
+	reporter *reporting.Reporter,
 ) {
 	log.Info("watcher_started", map[string]interface{}{
 		"pollIntervalSecs": cfg.PollIntervalSecs,
@@ -30,13 +29,9 @@ func Start(
 	ticker := time.NewTicker(time.Duration(cfg.PollIntervalSecs) * time.Second)
 	defer ticker.Stop()
 
-	// prevState tracks the last known running state per process name so we can
-	// log transitions (running→stopped, stopped→running) at info level without
-	// spamming every poll cycle.
 	prevState := make(map[string]bool)
 
-	// Run immediately on startup, then on each tick.
-	poll(ctx, cfg, watchlistMgr, processMgr, log, statusCh, prevState, notifier)
+	poll(ctx, cfg, watchlistMgr, processMgr, log, statusCh, prevState, reporter)
 
 	for {
 		select {
@@ -44,7 +39,7 @@ func Start(
 			log.Info("watcher_stopped", nil)
 			return
 		case <-ticker.C:
-			poll(ctx, cfg, watchlistMgr, processMgr, log, statusCh, prevState, notifier)
+			poll(ctx, cfg, watchlistMgr, processMgr, log, statusCh, prevState, reporter)
 		}
 	}
 }
@@ -57,7 +52,7 @@ func poll(
 	log *logger.Logger,
 	statusCh chan<- []core.WatchStatus,
 	prevState map[string]bool,
-	notifier *alerting.DiscordNotifier,
+	reporter *reporting.Reporter,
 ) {
 	entries, err := watchlistMgr.List(ctx)
 	if err != nil {
@@ -66,38 +61,26 @@ func poll(
 	}
 
 	statuses := make([]core.WatchStatus, 0, len(entries))
+	var events []core.ReportEvent
 
 	for _, entry := range entries {
-		status := buildStatus(ctx, cfg, entry, watchlistMgr, processMgr, log, notifier)
+		status, entryEvents := buildStatus(ctx, cfg, entry, watchlistMgr, processMgr, log)
 
-		// Log state transitions at info level.
 		wasRunning, seen := prevState[entry.Name]
 		if !seen {
-			// First poll — always report initial state at info.
 			if status.Running {
 				log.Info("process_up", map[string]interface{}{"name": entry.Name, "pid": status.Process.PID})
 			} else {
 				log.Info("process_down", map[string]interface{}{"name": entry.Name})
-				notifyAlert(ctx, cfg, notifier, log, alerting.Event{
-					Type:         alerting.EventProcessDown,
-					ProcessName:  entry.Name,
-					ProjectLabel: cfg.Alerts.ProjectLabel,
-					Message:      "process is down",
-				})
 			}
 		} else if status.Running && !wasRunning {
 			log.Info("process_up", map[string]interface{}{"name": entry.Name, "pid": status.Process.PID})
 		} else if !status.Running && wasRunning {
 			log.Info("process_down", map[string]interface{}{"name": entry.Name})
-			notifyAlert(ctx, cfg, notifier, log, alerting.Event{
-				Type:         alerting.EventProcessDown,
-				ProcessName:  entry.Name,
-				ProjectLabel: cfg.Alerts.ProjectLabel,
-				Message:      "process transitioned to down",
-			})
 		}
 		prevState[entry.Name] = status.Running
 
+		events = append(events, entryEvents...)
 		statuses = append(statuses, status)
 	}
 
@@ -107,10 +90,15 @@ func poll(
 		"memoryUsedPercent": hostMemPct,
 	})
 
-	// Non-blocking send, if nobody is consuming (e.g. TUI not yet started) we skip.
 	select {
 	case statusCh <- statuses:
 	default:
+	}
+
+	if reporter != nil {
+		if err := reporter.Send(ctx, statuses, events, hostCPU, hostMemPct, cfg.PollIntervalSecs); err != nil {
+			log.Error("reporter_send_failed", map[string]interface{}{"error": err.Error()})
+		}
 	}
 }
 
@@ -121,11 +109,10 @@ func buildStatus(
 	watchlistMgr core.WatchlistManager,
 	processMgr core.ProcessManager,
 	log *logger.Logger,
-	notifier *alerting.DiscordNotifier,
-) core.WatchStatus {
+) (core.WatchStatus, []core.ReportEvent) {
 	status := core.WatchStatus{Entry: entry}
+	var events []core.ReportEvent
 
-	// Liveness check with PID pinning
 	running, liveProc := checkLiveness(ctx, entry, watchlistMgr, processMgr)
 	status.Running = running
 	status.Process = liveProc
@@ -137,32 +124,40 @@ func buildStatus(
 			"cpuPercent": liveProc.CPUPercent,
 			"memoryMB":   liveProc.MemoryMB,
 		})
-		return status
+		return status, events
 	}
 
 	if !entry.AutoRestart {
-		return status
+		events = append(events, core.ReportEvent{
+			Time:    time.Now(),
+			Type:    core.EventProcessDown,
+			Process: entry.Name,
+		})
+		return status, events
 	}
 
-	// Auto-restart disabled after exceeding maxRetries.
+	// Process is down and we're about to act on it — emit process_down
+	events = append(events, core.ReportEvent{
+		Time:    time.Now(),
+		Type:    core.EventProcessDown,
+		Process: entry.Name,
+	})
+
 	if entry.FailCount >= entry.MaxRetries && entry.MaxRetries > 0 {
 		log.Error("process_max_retries_exceeded", map[string]interface{}{
 			"name":       entry.Name,
 			"failCount":  entry.FailCount,
 			"maxRetries": entry.MaxRetries,
 		})
-		notifyAlert(ctx, cfg, notifier, log, alerting.Event{
-			Type:         alerting.EventProcessMaxRetriesExceeded,
-			ProcessName:  entry.Name,
-			ProjectLabel: cfg.Alerts.ProjectLabel,
-			Message:      "process exceeded max restart retries",
+		events = append(events, core.ReportEvent{
+			Time:    time.Now(),
+			Type:    core.EventMaxRetriesExceeded,
+			Process: entry.Name,
 		})
-		// Disable auto-restart to stop repeated alerting.
 		watchlistMgr.Update(ctx, entry.Name, false)
-		return status
+		return status, events
 	}
 
-	// Cooldown check
 	if entry.LastRestart != "" && entry.CooldownSecs > 0 {
 		if lastRestart, err := time.Parse(time.RFC3339, entry.LastRestart); err == nil {
 			elapsed := time.Since(lastRestart)
@@ -175,15 +170,19 @@ func buildStatus(
 					"name":              entry.Name,
 					"cooldownRemaining": remaining,
 				})
-				return status
+				return status, events
 			}
 		}
 	}
 
-	// Attempt restart
 	log.Info("restart_attempt", map[string]interface{}{
 		"name":       entry.Name,
 		"restartCmd": entry.RestartCmd,
+	})
+	events = append(events, core.ReportEvent{
+		Time:    time.Now(),
+		Type:    core.EventRestartAttempt,
+		Process: entry.Name,
 	})
 
 	if err := processMgr.Restart(ctx, entry.RestartCmd); err != nil {
@@ -191,32 +190,31 @@ func buildStatus(
 			"name":  entry.Name,
 			"error": err.Error(),
 		})
-		notifyAlert(ctx, cfg, notifier, log, alerting.Event{
-			Type:         alerting.EventRestartFailed,
-			ProcessName:  entry.Name,
-			ProjectLabel: cfg.Alerts.ProjectLabel,
-			Message:      "restart command failed",
-			Error:        err.Error(),
+		events = append(events, core.ReportEvent{
+			Time:    time.Now(),
+			Type:    core.EventRestartFailed,
+			Process: entry.Name,
 		})
 		watchlistMgr.IncrementFailCount(ctx, entry.Name)
-		return status
+		return status, events
 	}
 
-	// Post-restart health verification
 	if cfg.RestartVerifyDelaySecs > 0 {
 		time.Sleep(time.Duration(cfg.RestartVerifyDelaySecs) * time.Second)
 	}
 
 	stillRunning, verifiedProc := checkLiveness(ctx, entry, watchlistMgr, processMgr)
 	if !stillRunning {
-		log.Error("restart_verify_failed", map[string]interface{}{
-			"name": entry.Name,
+		log.Error("restart_verify_failed", map[string]interface{}{"name": entry.Name})
+		events = append(events, core.ReportEvent{
+			Time:    time.Now(),
+			Type:    core.EventRestartVerifyFailed,
+			Process: entry.Name,
 		})
 		watchlistMgr.IncrementFailCount(ctx, entry.Name)
-		return status
+		return status, events
 	}
 
-	// Restart verified, update counts and tracked PID.
 	watchlistMgr.IncrementRestartCount(ctx, entry.Name)
 	watchlistMgr.ResetFailCount(ctx, entry.Name)
 	if verifiedProc != nil {
@@ -232,48 +230,23 @@ func buildStatus(
 			return 0
 		}(),
 	})
-	notifyAlert(ctx, cfg, notifier, log, alerting.Event{
-		Type:         alerting.EventRestartSuccess,
-		ProcessName:  entry.Name,
-		ProjectLabel: cfg.Alerts.ProjectLabel,
-		Message:      "restart verified successfully",
+	events = append(events, core.ReportEvent{
+		Time:    time.Now(),
+		Type:    core.EventRestartSuccess,
+		Process: entry.Name,
 	})
 
 	status.Running = true
 	status.Process = verifiedProc
-	return status
+	return status, events
 }
 
-func notifyAlert(
-	ctx context.Context,
-	cfg *config.Config,
-	notifier *alerting.DiscordNotifier,
-	log *logger.Logger,
-	event alerting.Event,
-) {
-	if cfg == nil || !cfg.Alerts.Enabled || notifier == nil {
-		return
-	}
-	if event.ProjectLabel == "" {
-		event.ProjectLabel = cfg.Alerts.ProjectLabel
-	}
-	if err := notifier.Notify(ctx, event); err != nil {
-		log.Error("alert_notify_failed", map[string]interface{}{
-			"event":   string(event.Type),
-			"process": event.ProcessName,
-			"error":   err.Error(),
-		})
-	}
-}
-
-// checkLiveness checks if the process is running using PID pinning with a name-based fallback. Updates the tracked PID if the pinned PID is stale.
 func checkLiveness(
 	ctx context.Context,
 	entry core.WatchlistItem,
 	watchlistMgr core.WatchlistManager,
 	processMgr core.ProcessManager,
 ) (bool, *core.Process) {
-	// Try pinned PID first.
 	if pid, err := watchlistMgr.GetTrackedPID(ctx, entry.Name); err == nil && pid > 0 {
 		if p, err := gopsprocess.NewProcessWithContext(ctx, pid); err == nil {
 			if alive, err := p.IsRunningWithContext(ctx); err == nil && alive {
@@ -281,21 +254,17 @@ func checkLiveness(
 				return true, proc
 			}
 		}
-		// Pinned PID is stale — fall through to name-based lookup.
 	}
 
-	// Name-based fallback.
 	matches, err := processMgr.Find(ctx, entry.Name)
 	if err != nil || len(matches) == 0 {
 		return false, nil
 	}
 
-	// Pin the first match going forward.
 	watchlistMgr.SetTrackedPID(ctx, entry.Name, matches[0].PID)
 	return true, &matches[0]
 }
 
-// pidToProcess builds a core.Process from a live gopsutil process handle.
 func pidToProcess(ctx context.Context, p *gopsprocess.Process) *core.Process {
 	name, _ := p.NameWithContext(ctx)
 	cpuPct, _ := p.CPUPercentWithContext(ctx)

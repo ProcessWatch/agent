@@ -1,5 +1,26 @@
 package core
 
+import "time"
+
+// EventType represents a lifecycle event in the monitoring system.
+type EventType string
+
+const (
+	EventProcessDown         EventType = "process_down"
+	EventRestartAttempt      EventType = "restart_attempt"
+	EventRestartFailed       EventType = "restart_failed"
+	EventRestartVerifyFailed EventType = "restart_verify_failed"
+	EventRestartSuccess      EventType = "restart_success"
+	EventMaxRetriesExceeded  EventType = "max_retries_exceeded"
+)
+
+// ReportEvent represents a discrete state transition that occurred during a poll cycle.
+type ReportEvent struct {
+	Time    time.Time `json:"time"`
+	Type    EventType `json:"type"`
+	Process string    `json:"process"`
+}
+
 // Process represents a system process.
 type Process struct {
 	Name          string  `json:"name"`
@@ -29,10 +50,4 @@ type WatchStatus struct {
 	Running           bool          `json:"running"`
 	InCooldown        bool          `json:"inCooldown"`
 	CooldownRemaining int           `json:"cooldownRemaining"` // seconds
-}
-
-// Event represents a loggable event in the system.
-type Event struct {
-	Type string                 `json:"type"`
-	Data map[string]interface{} `json:"data"`
 }

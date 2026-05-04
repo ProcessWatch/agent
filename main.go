@@ -9,12 +9,12 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/ethan-mdev/process-watch/internal/alerting"
 	"github.com/ethan-mdev/process-watch/internal/config"
 	"github.com/ethan-mdev/process-watch/internal/core"
 	"github.com/ethan-mdev/process-watch/internal/logger"
 	"github.com/ethan-mdev/process-watch/internal/monitor"
 	"github.com/ethan-mdev/process-watch/internal/process"
+	"github.com/ethan-mdev/process-watch/internal/reporting"
 	"github.com/ethan-mdev/process-watch/internal/storage"
 	"github.com/ethan-mdev/process-watch/internal/tui"
 )
@@ -45,15 +45,6 @@ func main() {
 	watchlist := storage.NewJSONWatchlist("watchlist.json")
 	processMgr := process.NewProcessManager()
 
-	var discordNotifier *alerting.DiscordNotifier
-	if cfg.Alerts.Enabled {
-		discordNotifier, err = alerting.NewDiscordNotifier(cfg.Alerts.DiscordWebhookURL)
-		if err != nil {
-			log.Fatalf("failed to initialize discord alerts: %v", err)
-		}
-		defer discordNotifier.Close()
-	}
-
 	// Context wired to OS signals
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -62,8 +53,20 @@ func main() {
 	// listener hasn't registered yet.
 	statusCh := make(chan []core.WatchStatus, 4)
 
-	// Watcher
-	go monitor.Start(ctx, cfg, watchlist, processMgr, l, statusCh, discordNotifier)
+	// Reporter
+	var reporter *reporting.Reporter
+	if cfg.Reporting.Enabled {
+		hostname, err := os.Hostname()
+		if err != nil {
+			hostname = "unknown"
+		}
+		reporter = reporting.NewReporter(cfg.Reporting.APIKey, hostname)
+		l.Info("reporter_started", map[string]interface{}{
+			"hostname": hostname,
+		})
+	}
+
+	go monitor.Start(ctx, cfg, watchlist, processMgr, l, statusCh, reporter)
 
 	if *headless {
 		items, err := watchlist.List(context.Background())
@@ -73,8 +76,7 @@ func main() {
 		}
 
 		l.Info("startup", map[string]interface{}{
-			"mode":            "headless",
-			"metricsEndpoint": fmt.Sprintf("http://localhost:%d/metrics (not yet enabled)", cfg.MetricsPort),
+			"mode": "headless",
 		})
 		go func() {
 			for range statusCh {
