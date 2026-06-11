@@ -2,8 +2,8 @@ package process
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -13,13 +13,17 @@ import (
 	gopsprocess "github.com/shirou/gopsutil/v4/process"
 )
 
-// shellMetachars are characters that warrant a warning when found in restartCmd.
-var shellMetachars = []string{"|", ";", "&&", "`"}
+// pipeWaitDelay bounds how long Restart waits on inherited stdout/stderr
+// pipes after the direct child exits — a detached grandchild holding the
+// pipe open must not block the watcher.
+const pipeWaitDelay = 5 * time.Second
 
-type ProcessManager struct{}
+type ProcessManager struct {
+	restartTimeout time.Duration
+}
 
-func NewProcessManager() *ProcessManager {
-	return &ProcessManager{}
+func NewProcessManager(restartTimeout time.Duration) *ProcessManager {
+	return &ProcessManager{restartTimeout: restartTimeout}
 }
 
 // ListAll returns a snapshot of all running OS processes.
@@ -79,23 +83,16 @@ func (pm *ProcessManager) Find(ctx context.Context, name string) ([]core.Process
 	return matches, nil
 }
 
-// IsRunning returns true if at least one process matching name is running.
-func (pm *ProcessManager) IsRunning(ctx context.Context, name string) (bool, error) {
-	matches, err := pm.Find(ctx, name)
-	if err != nil {
-		return false, err
-	}
-	return len(matches) > 0, nil
-}
-
 // Restart executes restartCmd via the system shell.
 // On Windows: cmd /c <restartCmd>
 // On Linux/macOS: sh -c <restartCmd>
+// The command is killed if it does not return within the configured timeout,
+// so a hung recovery command cannot stall the poll loop.
 func (pm *ProcessManager) Restart(ctx context.Context, restartCmd string) error {
-	for _, meta := range shellMetachars {
-		if strings.Contains(restartCmd, meta) {
-			log.Printf("[WARN] restartCmd contains shell metacharacter %q — ensure this is trusted input", meta)
-		}
+	if pm.restartTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, pm.restartTimeout)
+		defer cancel()
 	}
 
 	var cmd *exec.Cmd
@@ -105,8 +102,15 @@ func (pm *ProcessManager) Restart(ctx context.Context, restartCmd string) error 
 		cmd = exec.CommandContext(ctx, "sh", "-c", restartCmd)
 		cmd.SysProcAttr = detachAttr()
 	}
+	cmd.WaitDelay = pipeWaitDelay
 
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := cmd.CombinedOutput()
+	// ErrWaitDelay means the command itself exited successfully and only its
+	// inherited pipes were left open (e.g. by a process it started) — success.
+	if err != nil && !errors.Is(err, exec.ErrWaitDelay) {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("restart command timed out after %s", pm.restartTimeout)
+		}
 		return fmt.Errorf("restart command failed: %w (output: %s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/ethan-mdev/process-watch/internal/config"
 	"github.com/ethan-mdev/process-watch/internal/core"
@@ -43,7 +44,7 @@ func main() {
 
 	// Storage & process manager
 	watchlist := storage.NewJSONWatchlist("watchlist.json")
-	processMgr := process.NewProcessManager()
+	processMgr := process.NewProcessManager(time.Duration(cfg.RestartTimeoutSecs) * time.Second)
 
 	// Context wired to OS signals
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -69,9 +70,10 @@ func main() {
 	go monitor.Start(ctx, cfg, watchlist, processMgr, l, statusCh, reporter)
 
 	if *headless {
-		items, err := watchlist.List(context.Background())
+		items, err := watchlist.List(ctx)
 		if err != nil || len(items) == 0 {
 			fmt.Fprintln(os.Stderr, "No watchlist found. Run without --headless to set up a watchlist using the TUI.")
+			l.Close() // os.Exit skips deferred calls
 			os.Exit(1)
 		}
 

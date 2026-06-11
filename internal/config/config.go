@@ -15,6 +15,7 @@ type ReportingConfig struct {
 type Config struct {
 	PollIntervalSecs       int             `yaml:"pollIntervalSecs"`
 	RestartVerifyDelaySecs int             `yaml:"restartVerifyDelaySecs"`
+	RestartTimeoutSecs     int             `yaml:"restartTimeoutSecs"`
 	LogLevel               string          `yaml:"logLevel"`
 	Reporting              ReportingConfig `yaml:"reporting"`
 }
@@ -46,6 +47,7 @@ func WriteDefault(path string) error {
 	const template = `# ProcessWatch configuration
 pollIntervalSecs: 5
 restartVerifyDelaySecs: 3   # seconds to wait after restart before checking health
+restartTimeoutSecs: 60      # kill a recovery command that runs longer than this
 logLevel: info              # info | debug
 
 # reporting: configure to send metrics to a ProcessWatch dashboard
@@ -53,13 +55,15 @@ logLevel: info              # info | debug
 #   enabled: true
 #   apiKey: "pw_live_..."
 `
-	return os.WriteFile(path, []byte(template), 0644)
+	// 0600: the file may hold a dashboard API key.
+	return os.WriteFile(path, []byte(template), 0600)
 }
 
 func defaultConfig() *Config {
 	return &Config{
 		PollIntervalSecs:       5,
 		RestartVerifyDelaySecs: 3,
+		RestartTimeoutSecs:     60,
 		LogLevel:               "info",
 		Reporting: ReportingConfig{
 			Enabled: false,
@@ -67,7 +71,19 @@ func defaultConfig() *Config {
 	}
 }
 
-func applyDefaults(_ *Config) {}
+// applyDefaults fills zero values so partial config files still work.
+// RestartVerifyDelaySecs is left alone because 0 is a meaningful setting.
+func applyDefaults(cfg *Config) {
+	if cfg.PollIntervalSecs == 0 {
+		cfg.PollIntervalSecs = 5
+	}
+	if cfg.RestartTimeoutSecs == 0 {
+		cfg.RestartTimeoutSecs = 60
+	}
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = "info"
+	}
+}
 
 func validate(cfg *Config) error {
 	if cfg.PollIntervalSecs < 1 {
@@ -75,6 +91,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.RestartVerifyDelaySecs < 0 {
 		return fmt.Errorf("invalid restartVerifyDelaySecs %d: must be >= 0", cfg.RestartVerifyDelaySecs)
+	}
+	if cfg.RestartTimeoutSecs < 1 {
+		return fmt.Errorf("invalid restartTimeoutSecs %d: must be >= 1", cfg.RestartTimeoutSecs)
 	}
 	if cfg.LogLevel != "info" && cfg.LogLevel != "debug" {
 		return fmt.Errorf("invalid logLevel %q: must be \"info\" or \"debug\"", cfg.LogLevel)

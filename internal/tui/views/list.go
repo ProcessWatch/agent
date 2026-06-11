@@ -122,14 +122,23 @@ var listKeys = listKeyMap{
 // ListModel
 
 type ListModel struct {
-	ctx       context.Context
-	list      list.Model
-	watchlist core.WatchlistManager
-	statuses  []core.WatchStatus
-	showDebug bool
-	confirm   confirmation
-	width     int
-	height    int
+	ctx         context.Context
+	list        list.Model
+	watchlist   core.WatchlistManager
+	statuses    []core.WatchStatus
+	showDebug   bool
+	confirm     confirmation
+	notice      string
+	noticeIsErr bool
+	width       int
+	height      int
+}
+
+// SetNotice shows a transient message panel (e.g. a manual restart result).
+// It is cleared on the next keypress.
+func (m *ListModel) SetNotice(text string, isErr bool) {
+	m.notice = text
+	m.noticeIsErr = isErr
 }
 
 func NewListModel(ctx context.Context, watchlist core.WatchlistManager) ListModel {
@@ -176,6 +185,7 @@ func (m ListModel) selectedStatus() (core.WatchStatus, bool) {
 
 func (m ListModel) Update(msg tea.Msg) (ListModel, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok {
+		m.notice = ""
 		if m.confirm.active {
 			switch km.String() {
 			case "y":
@@ -264,6 +274,15 @@ func (m ListModel) View() string {
 				Render(styleDim.Render("debug\n\n") + debugText)
 			content = lipgloss.JoinHorizontal(lipgloss.Top, content, panel)
 		}
+	} else if m.notice != "" {
+		noticeStyle := styleRunning
+		if m.noticeIsErr {
+			noticeStyle = styleStopped
+		}
+		panel := styleBorder.
+			Width(m.width/3 - 2).
+			Render(noticeStyle.Render(m.notice) + "\n\n" + styleDim.Render("press any key to dismiss"))
+		content = lipgloss.JoinHorizontal(lipgloss.Top, content, panel)
 	}
 
 	return content

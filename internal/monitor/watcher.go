@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/ethan-mdev/process-watch/internal/config"
@@ -82,6 +83,18 @@ func poll(
 
 		events = append(events, entryEvents...)
 		statuses = append(statuses, status)
+	}
+
+	// Forget state for entries removed from the watchlist, so re-adding one
+	// later logs a fresh up/down transition.
+	current := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		current[entry.Name] = true
+	}
+	for name := range prevState {
+		if !current[name] {
+			delete(prevState, name)
+		}
 	}
 
 	hostCPU, hostMemPct := sampleHostResources()
@@ -250,8 +263,12 @@ func checkLiveness(
 	if pid, err := watchlistMgr.GetTrackedPID(ctx, entry.Name); err == nil && pid > 0 {
 		if p, err := gopsprocess.NewProcessWithContext(ctx, pid); err == nil {
 			if alive, err := p.IsRunningWithContext(ctx); err == nil && alive {
-				proc := pidToProcess(ctx, p)
-				return true, proc
+				// The OS may have recycled the PID for an unrelated process;
+				// only trust it if the name still matches the watch entry.
+				if name, err := p.NameWithContext(ctx); err == nil &&
+					strings.Contains(strings.ToLower(name), strings.ToLower(entry.Name)) {
+					return true, pidToProcess(ctx, p)
+				}
 			}
 		}
 	}

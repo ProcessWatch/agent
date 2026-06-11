@@ -89,6 +89,9 @@ func (r *Reporter) Send(ctx context.Context, statuses []core.WatchStatus, events
 		return fmt.Errorf("reporter: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// The dashboard currently reads the key from the body; also send it as a
+	// bearer token so the body field can be dropped once ingest supports it.
+	req.Header.Set("Authorization", "Bearer "+r.apiKey)
 
 	resp, err := r.client.Do(req)
 	if err != nil {

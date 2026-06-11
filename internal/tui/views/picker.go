@@ -209,8 +209,6 @@ func (m PickerModel) updateForm(msg tea.KeyMsg) (PickerModel, tea.Cmd) {
 }
 
 func (m PickerModel) submitForm() (PickerModel, tea.Cmd) {
-	maxRetries, _ := strconv.Atoi(strings.TrimSpace(m.inputs[fieldMaxRetries].Value()))
-	cooldownSecs, _ := strconv.Atoi(strings.TrimSpace(m.inputs[fieldCooldownSecs].Value()))
 	autoRestart := m.autoRestartEnabled()
 	restartCmd := strings.TrimSpace(m.inputs[fieldRestartCmd].Value())
 
@@ -219,11 +217,15 @@ func (m PickerModel) submitForm() (PickerModel, tea.Cmd) {
 		return m, nil
 	}
 
-	if maxRetries <= 0 {
-		maxRetries = 5
+	maxRetries, ok := parsePositiveInt(m.inputs[fieldMaxRetries].Value(), 5)
+	if !ok {
+		m.err = "max retries must be a positive number"
+		return m, nil
 	}
-	if cooldownSecs <= 0 {
-		cooldownSecs = 10
+	cooldownSecs, ok := parsePositiveInt(m.inputs[fieldCooldownSecs].Value(), 10)
+	if !ok {
+		m.err = "cooldown must be a positive number"
+		return m, nil
 	}
 
 	entry := core.WatchlistItem{
@@ -307,6 +309,20 @@ func (m PickerModel) visibleFields() []int {
 		return []int{fieldAutoRestart}
 	}
 	return []int{fieldAutoRestart, fieldRestartCmd, fieldMaxRetries, fieldCooldownSecs}
+}
+
+// parsePositiveInt parses s as a positive integer, returning fallback when s
+// is empty. ok is false when s is non-empty and not a positive integer.
+func parsePositiveInt(s string, fallback int) (value int, ok bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return fallback, true
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 func nextVisibleField(fields []int, current int) int {

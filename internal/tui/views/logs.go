@@ -160,7 +160,9 @@ func (m *LogsModel) Load() {
 
 	m.list.SetItems(items)
 	// Start scrolled to the bottom so the most recent entries are visible
-	m.list.Select(len(items) - 1)
+	if len(items) > 0 {
+		m.list.Select(len(items) - 1)
+	}
 }
 
 func (m LogsModel) Update(msg tea.Msg) (LogsModel, tea.Cmd) {

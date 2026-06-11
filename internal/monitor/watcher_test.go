@@ -362,10 +362,6 @@ func (f *fakeProcessManager) Find(ctx context.Context, name string) ([]core.Proc
 	return next, nil
 }
 
-func (f *fakeProcessManager) IsRunning(ctx context.Context, name string) (bool, error) {
-	return false, nil
-}
-
 func (f *fakeProcessManager) Restart(ctx context.Context, restartCmd string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -460,6 +456,7 @@ func (f *fakeWatchlist) IncrementFailCount(ctx context.Context, name string) err
 		return fmt.Errorf("not found: %s", name)
 	}
 	item.FailCount++
+	item.LastRestart = time.Now().Format(time.RFC3339)
 	f.items[name] = item
 	f.incrementFailCalls++
 	return nil

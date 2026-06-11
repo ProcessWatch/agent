@@ -36,14 +36,14 @@ type WatchlistItem struct {
 	Name         string `json:"name"`
 	RestartCmd   string `json:"restartCmd"`
 	AutoRestart  bool   `json:"autoRestart"`
-	MaxRetries   int    `json:"maxRetries"`
+	MaxRetries   int    `json:"maxRetries"` // 0 = retry forever
 	CooldownSecs int    `json:"cooldownSecs"`
 	RestartCount int    `json:"restartCount"`
 	FailCount    int    `json:"failCount"`
-	LastRestart  string `json:"lastRestart"`
+	LastRestart  string `json:"lastRestart"` // RFC3339 time of the last restart attempt (success or failure)
 }
 
-// WatchStatus (central data type flowing from watcher -> TUI and watcher -> prometheus)
+// WatchStatus is the central data type flowing from the watcher to the TUI and reporter.
 type WatchStatus struct {
 	Entry             WatchlistItem `json:"entry"`
 	Process           *Process      `json:"process,omitempty"` // nil if not running

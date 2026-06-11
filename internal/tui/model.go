@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ethan-mdev/process-watch/internal/core"
@@ -105,12 +107,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case views.RestartRequestMsg:
 		entry := msg.Entry
+		if strings.TrimSpace(entry.RestartCmd) == "" {
+			m.list.SetNotice(fmt.Sprintf("%s has no restart command configured", entry.Name), true)
+			return m, nil
+		}
 		return m, func() tea.Msg {
 			err := m.processMgr.Restart(m.ctx, entry.RestartCmd)
 			return RestartResultMsg{Name: entry.Name, Err: err}
 		}
 
 	case RestartResultMsg:
+		if msg.Err != nil {
+			m.list.SetNotice(fmt.Sprintf("restart %s failed: %v", msg.Name, msg.Err), true)
+		} else {
+			m.list.SetNotice(fmt.Sprintf("restart command for %s completed", msg.Name), false)
+		}
 		return m, nil
 
 	case tea.KeyMsg:

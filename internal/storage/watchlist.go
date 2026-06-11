@@ -116,6 +116,9 @@ func (j *jsonWatchlist) IncrementFailCount(ctx context.Context, name string) err
 		return fmt.Errorf("process not in watchlist: %s", name)
 	}
 	item.FailCount++
+	// A failure is still a restart attempt — stamping it here makes the
+	// cooldown space out failed retries instead of only successful ones.
+	item.LastRestart = time.Now().Format(time.RFC3339)
 	return j.save()
 }
 
@@ -157,15 +160,18 @@ func (j *jsonWatchlist) GetTrackedPID(ctx context.Context, name string) (int32, 
 
 func (j *jsonWatchlist) load() {
 	data, err := os.ReadFile(j.filepath)
-	if os.IsNotExist(err) {
-		return
-	}
 	if err != nil {
 		return
 	}
 
 	var items []core.WatchlistItem
 	if err := json.Unmarshal(data, &items); err != nil {
+		// Don't let the next save silently overwrite a corrupt (likely
+		// hand-edited) watchlist — keep a copy and start empty.
+		backup := j.filepath + ".bak"
+		if renameErr := os.Rename(j.filepath, backup); renameErr == nil {
+			fmt.Fprintf(os.Stderr, "watchlist: could not parse %s (%v); moved to %s\n", j.filepath, err, backup)
+		}
 		return
 	}
 
@@ -188,7 +194,8 @@ func (j *jsonWatchlist) save() error {
 	}
 
 	tmp := j.filepath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	// 0600: the watchlist holds shell commands the agent will execute.
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return fmt.Errorf("writing watchlist temp file: %w", err)
 	}
 	if err := os.Rename(tmp, j.filepath); err != nil {

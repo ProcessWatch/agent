@@ -6,8 +6,7 @@ import "context"
 type ProcessManager interface {
 	ListAll(ctx context.Context) ([]Process, error)           // all OS processes
 	Find(ctx context.Context, name string) ([]Process, error) // match by name (may return multiple PIDs)
-	IsRunning(ctx context.Context, name string) (bool, error)
-	Restart(ctx context.Context, restartCmd string) error // exec.Command via shell
+	Restart(ctx context.Context, restartCmd string) error     // exec.Command via shell
 }
 
 // WatchlistManager abstracts watchlist management.
@@ -24,7 +23,8 @@ type WatchlistManager interface {
 	Update(ctx context.Context, name string, autoRestart bool) error
 	// Increments the restart count and last restart time for a watchlist item.
 	IncrementRestartCount(ctx context.Context, name string) error
-	// Increments the failure count for a watchlist item.
+	// Increments the failure count and stamps the last restart-attempt time
+	// for a watchlist item, so cooldowns also space out failed retries.
 	IncrementFailCount(ctx context.Context, name string) error
 	// Resets the failure count for a watchlist item (e.g., after a successful restart).
 	ResetFailCount(ctx context.Context, name string) error
