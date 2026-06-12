@@ -1,3 +1,7 @@
+// Package reporting sends heartbeat payloads — host metrics, watched process
+// states, and lifecycle events — to the hosted ProcessWatch dashboard ingest
+// API. A failed send is logged and dropped; the next poll cycle reports the
+// current state anyway, so there is no retry or queue.
 package reporting
 
 import (

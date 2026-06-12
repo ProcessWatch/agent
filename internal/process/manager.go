@@ -1,3 +1,5 @@
+// Package process implements core.ProcessManager against the real OS:
+// gopsutil for process inspection, the system shell for recovery commands.
 package process
 
 import (
@@ -66,7 +68,9 @@ func (pm *ProcessManager) ListAll(ctx context.Context) ([]core.Process, error) {
 }
 
 // Find returns all running processes whose name contains the given string
-// (case-insensitive substring match).
+// (case-insensitive substring match). The match is deliberately loose so
+// hand-edited watchlist entries still work, but it means watching "node"
+// also matches "node_exporter" — watch the most specific name available.
 func (pm *ProcessManager) Find(ctx context.Context, name string) ([]core.Process, error) {
 	all, err := pm.ListAll(ctx)
 	if err != nil {

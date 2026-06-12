@@ -1,3 +1,7 @@
+// Package views contains the individual Bubble Tea screens: the welcome
+// prompt, the main dashboard list, the process picker with its add form, and
+// the event log viewer. Views talk to each other only through the SwitchTo*
+// and request messages defined in list.go; the parent model does the routing.
 package views
 
 import (

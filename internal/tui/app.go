@@ -1,3 +1,6 @@
+// Package tui hosts the Bubble Tea terminal UI. app.go bootstraps the
+// program; model.go owns the top-level model that routes messages between
+// the views and re-arms the listener for watcher status snapshots.
 package tui
 
 import (

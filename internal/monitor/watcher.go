@@ -1,3 +1,6 @@
+// Package monitor implements the agent's polling loop: each cycle it checks
+// the liveness of every watchlist entry, runs recovery commands where needed,
+// and publishes a status snapshot plus any lifecycle events that occurred.
 package monitor
 
 import (
@@ -14,6 +17,15 @@ import (
 	gopsprocess "github.com/shirou/gopsutil/v4/process"
 )
 
+// Start runs the poll loop until ctx is cancelled. It is the only goroutine
+// that runs recovery commands or mutates watchlist counters; the TUI reads
+// the same watchlist but only ever adds/removes entries.
+//
+// Each cycle publishes a full status snapshot on statusCh with a non-blocking
+// send: if the consumer is behind, the snapshot is dropped — the next cycle
+// supersedes it anyway. Restarts, verify delays, and the dashboard heartbeat
+// all run inline, so a cycle can exceed the poll interval; ticks that fire in
+// the meantime are dropped by the ticker, not queued.
 func Start(
 	ctx context.Context,
 	cfg *config.Config,
@@ -115,6 +127,10 @@ func poll(
 	}
 }
 
+// buildStatus evaluates one entry: liveness first, then — when the process is
+// down and auto-restart is enabled — the retry budget, the cooldown window,
+// and finally the recovery command itself. It returns the entry's status and
+// whatever lifecycle events the cycle produced, in the order they happened.
 func buildStatus(
 	ctx context.Context,
 	cfg *config.Config,
@@ -254,6 +270,10 @@ func buildStatus(
 	return status, events
 }
 
+// checkLiveness reports whether the entry's process is running. It prefers
+// the PID where the process was last seen — cheaper than a full scan, and
+// stable when several processes share a name — and falls back to a name
+// search, pinning the first match for the next cycle.
 func checkLiveness(
 	ctx context.Context,
 	entry core.WatchlistItem,

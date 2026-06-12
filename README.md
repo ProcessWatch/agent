@@ -215,6 +215,19 @@ Events are logged to `logs/events.jsonl` in structured JSON format. Log rotation
 
 From the TUI, press `e` to open the event log viewer. Use `/` to filter by event type, process name, or data field. Press `q` to return to the dashboard.
 
+## How It Works
+
+The agent is a single process with two long-lived loops. The **watcher** (`internal/monitor`) wakes on a fixed interval and evaluates every watchlist entry; the **TUI** (`internal/tui`) consumes the watcher's status snapshots over a channel and renders the dashboard. In headless mode the snapshots are discarded — the structured log and dashboard reporting carry the signal instead.
+
+Each poll cycle:
+
+1. Loads the watchlist (`internal/storage`, a JSON file written atomically on every change).
+2. Checks liveness for each entry — by the PID where the process was last seen when possible, falling back to a case-insensitive substring search by name.
+3. For a down process with auto-restart enabled: checks the retry budget and cooldown window, runs the recovery command via the system shell (killed after `restartTimeoutSecs`), waits `restartVerifyDelaySecs`, and re-checks.
+4. Logs events to `logs/events.jsonl` and, when reporting is enabled, POSTs a heartbeat with host metrics, process states, and lifecycle events to the dashboard.
+
+Restart and failure counters persist in `watchlist.json`, so retry budgets survive agent restarts. Tracked PIDs are in-memory only and are re-discovered by name after a restart. Snapshot delivery to the TUI is lossy by design: if the UI is busy, the watcher drops the snapshot rather than block, since the next cycle supersedes it.
+
 ## Project Structure
 
 ```text

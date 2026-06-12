@@ -1,3 +1,7 @@
+// Package storage persists the watchlist as a JSON file next to the
+// executable. Every mutation rewrites the whole file atomically (temp file +
+// rename), so a crash mid-save can never corrupt it. Tracked PIDs are held in
+// memory only and are re-discovered by name after an agent restart.
 package storage
 
 import (

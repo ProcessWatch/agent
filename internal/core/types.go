@@ -1,3 +1,6 @@
+// Package core defines the data types and interfaces shared by the watcher,
+// storage, TUI, and reporter. It depends on nothing else in the project, so
+// any package can import it without cycles.
 package core
 
 import "time"

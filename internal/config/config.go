@@ -1,3 +1,6 @@
+// Package config loads and validates config.yaml, writing a commented
+// default file on first run. Zero values for most fields are filled with
+// defaults before validation, so partial config files work.
 package config
 
 import (

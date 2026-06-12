@@ -1,3 +1,6 @@
+// Package logger writes structured JSONL events to a size-rotated log file
+// (lumberjack) and mirrors them to stdout until quiet mode is enabled —
+// stdout must stay silent while the TUI owns the terminal.
 package logger
 
 import (

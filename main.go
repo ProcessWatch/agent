@@ -1,3 +1,10 @@
+// ProcessWatch is a cross-platform process monitoring agent with a terminal
+// UI, structured local logs, optional recovery commands, and hosted dashboard
+// reporting.
+//
+// main owns the process lifetime: it wires the shared dependencies, starts
+// the single watcher goroutine, then either runs the TUI in the foreground or
+// parks until SIGINT/SIGTERM in headless mode.
 package main
 
 import (
@@ -67,6 +74,9 @@ func main() {
 		})
 	}
 
+	// The watcher is the only writer to statusCh. Exactly one consumer must
+	// keep draining it: the TUI in interactive mode, or the throwaway
+	// goroutine below in headless mode.
 	go monitor.Start(ctx, cfg, watchlist, processMgr, l, statusCh, reporter)
 
 	if *headless {
