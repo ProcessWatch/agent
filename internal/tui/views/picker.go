@@ -3,6 +3,7 @@ package views
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -33,7 +34,10 @@ type pickerErrMsg string
 // --- Form field indices ---
 
 const (
-	fieldAutoRestart = iota
+	fieldMatchMode = iota
+	fieldSelector
+	fieldExpectedCount
+	fieldAutoRestart
 	fieldRestartCmd
 	fieldMaxRetries
 	fieldCooldownSecs
@@ -41,10 +45,31 @@ const (
 )
 
 var fieldLabels = [fieldCount]string{
+	"Match by            ",
+	"Selector            ",
+	"Expected instances  ",
 	"Auto-restart        ",
 	"Restart command     ",
 	"Max retries         ",
 	"Cooldown (secs)     ",
+}
+
+// matchModeHelp explains each mode in terms of what it fixes, since the
+// difference between them only matters once something is misidentified.
+var matchModeHelp = map[core.MatchMode]string{
+	core.MatchSubstring: "Any process whose name contains the selector. Loose — \"node\" also matches \"node_exporter\".",
+	core.MatchExact:     "Only processes named exactly this. The safe default.",
+	core.MatchCmdline:   "Match part of the full command line. Use this to tell apart several workers that share a name.",
+	core.MatchUnit:      "Ask systemd about a unit. Accepts globs like \"gt-web@*\". Most reliable, Linux only.",
+}
+
+// availableMatchModes omits unit mode off Linux, where it cannot work.
+func availableMatchModes() []core.MatchMode {
+	modes := []core.MatchMode{core.MatchExact, core.MatchCmdline, core.MatchSubstring}
+	if runtime.GOOS == "linux" {
+		modes = append(modes, core.MatchUnit)
+	}
+	return modes
 }
 
 // --- Picker stages ---
@@ -114,12 +139,18 @@ func (m PickerModel) initForm() PickerModel {
 		return t
 	}
 
+	// The user just picked a concrete process out of the list, so exact
+	// matching on its name is both correct and an immediate upgrade over the
+	// substring matching older entries default to.
+	m.inputs[fieldMatchMode] = newInput(string(core.MatchExact), string(core.MatchExact), 12)
+	m.inputs[fieldSelector] = newInput(m.selected.Name, m.selected.Name, 256)
+	m.inputs[fieldExpectedCount] = newInput("1", "1", 4)
 	m.inputs[fieldAutoRestart] = newInput("false", "false", 5)
 	m.inputs[fieldRestartCmd] = newInput("e.g. systemctl restart my-service", "", 256)
 	m.inputs[fieldMaxRetries] = newInput("5", "5", 3)
 	m.inputs[fieldCooldownSecs] = newInput("10", "10", 4)
 
-	m.focused = fieldAutoRestart
+	m.focused = fieldMatchMode
 	m.inputs[m.focused].Focus()
 	m.stage = stageForm
 	m.err = ""
@@ -177,8 +208,13 @@ func (m PickerModel) updateForm(msg tea.KeyMsg) (PickerModel, tea.Cmd) {
 		m.stage = stagePicking
 		return m, nil
 	case " ", "left", "right":
-		if m.focused == fieldAutoRestart {
+		switch m.focused {
+		case fieldAutoRestart:
 			m.toggleAutoRestart()
+			m.err = ""
+			return m, nil
+		case fieldMatchMode:
+			m.cycleMatchMode(msg.String() == "left")
 			m.err = ""
 			return m, nil
 		}
@@ -217,6 +253,24 @@ func (m PickerModel) submitForm() (PickerModel, tea.Cmd) {
 		return m, nil
 	}
 
+	selector := strings.TrimSpace(m.inputs[fieldSelector].Value())
+	if selector == "" {
+		m.err = "selector cannot be empty"
+		return m, nil
+	}
+
+	mode := m.matchMode()
+	if mode == core.MatchUnit && runtime.GOOS != "linux" {
+		m.err = "unit matching requires Linux — use exact or command line instead"
+		return m, nil
+	}
+
+	expected, ok := parsePositiveInt(m.inputs[fieldExpectedCount].Value(), 1)
+	if !ok {
+		m.err = "expected instances must be a positive number"
+		return m, nil
+	}
+
 	maxRetries, ok := parsePositiveInt(m.inputs[fieldMaxRetries].Value(), 5)
 	if !ok {
 		m.err = "max retries must be a positive number"
@@ -229,11 +283,14 @@ func (m PickerModel) submitForm() (PickerModel, tea.Cmd) {
 	}
 
 	entry := core.WatchlistItem{
-		Name:         m.selected.Name,
-		RestartCmd:   restartCmd,
-		AutoRestart:  autoRestart,
-		MaxRetries:   maxRetries,
-		CooldownSecs: cooldownSecs,
+		Name:          m.selected.Name,
+		MatchMode:     mode,
+		Selector:      selector,
+		ExpectedCount: expected,
+		RestartCmd:    restartCmd,
+		AutoRestart:   autoRestart,
+		MaxRetries:    maxRetries,
+		CooldownSecs:  cooldownSecs,
 	}
 
 	if err := m.watchlist.Add(m.ctx, entry); err != nil {
@@ -274,6 +331,11 @@ func (m PickerModel) formView() string {
 		b.WriteString("\n\n")
 	}
 
+	if help, ok := matchModeHelp[m.matchMode()]; ok {
+		b.WriteString(styleDim.Render(help))
+		b.WriteString("\n\n")
+	}
+
 	if !m.autoRestartEnabled() {
 		b.WriteString(styleDim.Render("Auto-restart is off. ProcessWatch will monitor this process and report incidents without running a recovery command."))
 		b.WriteString("\n\n")
@@ -287,7 +349,7 @@ func (m PickerModel) formView() string {
 		b.WriteString("\n\n")
 	}
 
-	b.WriteString(styleDim.Render("tab/↑↓ navigate · enter next/confirm · esc back"))
+	b.WriteString(styleDim.Render("tab/↑↓ navigate · space/←→ change · enter next/confirm · esc back"))
 
 	return styleBorder.Width(m.width - 4).Render(b.String())
 }
@@ -304,11 +366,40 @@ func (m *PickerModel) toggleAutoRestart() {
 	m.inputs[fieldAutoRestart].SetValue("true")
 }
 
-func (m PickerModel) visibleFields() []int {
-	if !m.autoRestartEnabled() {
-		return []int{fieldAutoRestart}
+func (m PickerModel) matchMode() core.MatchMode {
+	return core.MatchMode(strings.TrimSpace(m.inputs[fieldMatchMode].Value()))
+}
+
+func (m *PickerModel) cycleMatchMode(backwards bool) {
+	modes := availableMatchModes()
+	current := 0
+	for i, mode := range modes {
+		if mode == m.matchMode() {
+			current = i
+			break
+		}
 	}
-	return []int{fieldAutoRestart, fieldRestartCmd, fieldMaxRetries, fieldCooldownSecs}
+	step := 1
+	if backwards {
+		step = -1
+	}
+	next := modes[(current+step+len(modes))%len(modes)]
+	m.inputs[fieldMatchMode].SetValue(string(next))
+
+	// A unit selector is a unit name, not a process name — seed the suffix so
+	// the field is a sensible starting point rather than something that will
+	// silently never match.
+	if next == core.MatchUnit && !strings.Contains(m.inputs[fieldSelector].Value(), ".") {
+		m.inputs[fieldSelector].SetValue(m.selected.Name + ".service")
+	}
+}
+
+func (m PickerModel) visibleFields() []int {
+	fields := []int{fieldMatchMode, fieldSelector, fieldExpectedCount, fieldAutoRestart}
+	if !m.autoRestartEnabled() {
+		return fields
+	}
+	return append(fields, fieldRestartCmd, fieldMaxRetries, fieldCooldownSecs)
 }
 
 // parsePositiveInt parses s as a positive integer, returning fallback when s

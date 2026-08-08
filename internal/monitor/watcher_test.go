@@ -14,7 +14,7 @@ import (
 	"github.com/ethan-mdev/process-watch/internal/logger"
 )
 
-func TestCheckLivenessNameFallbackPinsPID(t *testing.T) {
+func TestCheckLivenessPinsRepresentativePID(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -28,12 +28,15 @@ func TestCheckLivenessNameFallbackPinsPID(t *testing.T) {
 		},
 	}
 
-	running, proc := checkLiveness(ctx, entry, watchlist, processMgr)
+	running, proc, found := checkLiveness(ctx, entry, watchlist, processMgr)
 	if !running {
 		t.Fatalf("running = false, want true")
 	}
 	if proc == nil || proc.PID != 42 {
 		t.Fatalf("proc = %+v, want PID 42", proc)
+	}
+	if found != 1 {
+		t.Fatalf("found = %d, want 1", found)
 	}
 
 	pinned, err := watchlist.GetTrackedPID(ctx, entry.Name)
@@ -42,6 +45,87 @@ func TestCheckLivenessNameFallbackPinsPID(t *testing.T) {
 	}
 	if pinned != 42 {
 		t.Fatalf("tracked pid = %d, want 42", pinned)
+	}
+}
+
+// A watchlist entry written before match modes existed must keep behaving
+// exactly as it did: substring matching on the entry name.
+func TestCheckLivenessDefaultsToSubstringOnLegacyEntry(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	watchlist := newFakeWatchlist()
+	entry := core.WatchlistItem{Name: "legacy-svc"} // no MatchMode, no Selector
+	watchlist.items[entry.Name] = entry
+
+	processMgr := &fakeProcessManager{
+		findQueues: map[string][][]core.Process{
+			entry.Name: {{testProcess(entry.Name, 7)}},
+		},
+	}
+
+	running, _, _ := checkLiveness(ctx, entry, watchlist, processMgr)
+	if !running {
+		t.Fatalf("running = false, want true")
+	}
+	if got := processMgr.lastSelector; got.Mode != core.MatchSubstring || got.Value != entry.Name {
+		t.Fatalf("selector = %+v, want {substring %s}", got, entry.Name)
+	}
+}
+
+// Counting the whole match set is the point: three of four workers alive must
+// read as running-but-degraded, not simply healthy.
+func TestCheckLivenessCountsEveryMatch(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	watchlist := newFakeWatchlist()
+	entry := testWatchEntry("gt-web", false)
+	entry.ExpectedCount = 4
+	watchlist.items[entry.Name] = entry
+
+	processMgr := &fakeProcessManager{
+		findQueues: map[string][][]core.Process{
+			entry.Name: {{
+				testProcess(entry.Name, 11),
+				testProcess(entry.Name, 12),
+				testProcess(entry.Name, 13),
+			}},
+		},
+	}
+
+	running, _, found := checkLiveness(ctx, entry, watchlist, processMgr)
+	if !running {
+		t.Fatalf("running = false, want true")
+	}
+	if found != 3 {
+		t.Fatalf("found = %d, want 3", found)
+	}
+
+	status := core.WatchStatus{Running: running, Found: found, Expected: entry.ExpectedCount}
+	if !status.Degraded() {
+		t.Fatalf("Degraded() = false with %d of %d running, want true", found, entry.ExpectedCount)
+	}
+}
+
+// An entry that never declared an expected count must not have one invented
+// for it. A legacy substring entry matching several processes would otherwise
+// report e.g. 3-of-1 and raise an incident about nothing.
+func TestUndeclaredExpectedCountIsNotDegraded(t *testing.T) {
+	t.Parallel()
+
+	entry := core.WatchlistItem{Name: "legacy-node"} // no ExpectedCount
+	status := core.WatchStatus{
+		Running:  true,
+		Found:    3, // substring matched three unrelated processes
+		Expected: entry.ExpectedCount,
+	}
+
+	if status.Degraded() {
+		t.Fatalf("Degraded() = true for an entry with no declared expectation, want false")
+	}
+	if status.Expected != 0 {
+		t.Fatalf("Expected = %d, want 0 so the dashboard skips the count check", status.Expected)
 	}
 }
 
@@ -296,6 +380,120 @@ func TestBuildStatusRestartSuccessUpdatesState(t *testing.T) {
 	}
 }
 
+func TestHasRecovered(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		running    bool
+		wasRunning bool
+		seen       bool
+		want       bool
+	}{
+		// The transition that matters: a process the agent watched go down is
+		// running again, whether the agent, systemd, or a human restarted it.
+		{"down then up", true, false, true, true},
+
+		// First sighting after the agent starts. Reported so an incident
+		// opened before an agent restart still gets closed.
+		{"first sighting running", true, false, false, true},
+		{"first sighting down", false, false, false, false},
+
+		// Steady states emit nothing, so a long-running process does not
+		// re-report recovery on every poll.
+		{"still running", true, true, true, false},
+		{"still down", false, false, true, false},
+
+		// Going down is process_down's job, not this one's.
+		{"up then down", false, true, true, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := hasRecovered(tt.running, tt.wasRunning, tt.seen); got != tt.want {
+				t.Fatalf("hasRecovered(running=%v, wasRunning=%v, seen=%v) = %v, want %v",
+					tt.running, tt.wasRunning, tt.seen, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReportBufferAccumulatesEventsBetweenSends(t *testing.T) {
+	t.Parallel()
+
+	buf := newReportBuffer()
+	statusA := []core.WatchStatus{{Running: false}}
+	statusB := []core.WatchStatus{{Running: true}}
+
+	// Several polls happen between two reports.
+	buf.update(statusA, []core.ReportEvent{{Type: core.EventProcessDown, Process: "a"}}, 10, 20)
+	buf.update(statusB, []core.ReportEvent{{Type: core.EventProcessRecovered, Process: "a"}}, 30, 40)
+
+	statuses, events, cpu, mem, ok := buf.take()
+	if !ok {
+		t.Fatal("take() ok = false, want true")
+	}
+	// Statuses are current-state: the latest wins.
+	if len(statuses) != 1 || !statuses[0].Running {
+		t.Fatalf("statuses = %+v, want the newest snapshot", statuses)
+	}
+	if cpu != 30 || mem != 40 {
+		t.Fatalf("cpu/mem = %v/%v, want 30/40", cpu, mem)
+	}
+	// Events are history: none may be dropped.
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2 (down then recovered)", len(events))
+	}
+	if events[0].Type != core.EventProcessDown || events[1].Type != core.EventProcessRecovered {
+		t.Fatalf("event order = %q,%q, want process_down,process_recovered", events[0].Type, events[1].Type)
+	}
+
+	// A drained buffer still reports the last snapshot, with no repeat events.
+	_, events, _, _, ok = buf.take()
+	if !ok || len(events) != 0 {
+		t.Fatalf("second take: ok=%v events=%d, want ok=true events=0", ok, len(events))
+	}
+}
+
+func TestReportBufferRequeuePreservesOrder(t *testing.T) {
+	t.Parallel()
+
+	buf := newReportBuffer()
+	buf.update(nil, []core.ReportEvent{{Process: "first"}}, 0, 0)
+
+	_, events, _, _, _ := buf.take()
+	buf.update(nil, []core.ReportEvent{{Process: "second"}}, 0, 0)
+	buf.requeue(events) // the send failed
+
+	_, events, _, _, _ = buf.take()
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2", len(events))
+	}
+	if events[0].Process != "first" || events[1].Process != "second" {
+		t.Fatalf("order = %q,%q, want first,second", events[0].Process, events[1].Process)
+	}
+}
+
+func TestReportBufferBoundsGrowth(t *testing.T) {
+	t.Parallel()
+
+	buf := newReportBuffer()
+	for i := 0; i < maxBufferedEvents+50; i++ {
+		buf.update(nil, []core.ReportEvent{{Process: fmt.Sprintf("evt-%d", i)}}, 0, 0)
+	}
+
+	_, events, _, _, _ := buf.take()
+	if len(events) != maxBufferedEvents {
+		t.Fatalf("events = %d, want capped at %d", len(events), maxBufferedEvents)
+	}
+	// Oldest are dropped, so the most recent transition always survives.
+	last := events[len(events)-1].Process
+	if want := fmt.Sprintf("evt-%d", maxBufferedEvents+49); last != want {
+		t.Fatalf("newest retained = %q, want %q", last, want)
+	}
+}
+
 func testConfig() *config.Config {
 	return &config.Config{
 		PollIntervalSecs:       1,
@@ -341,6 +539,7 @@ func testProcess(name string, pid int32) core.Process {
 type fakeProcessManager struct {
 	mu           sync.Mutex
 	findQueues   map[string][][]core.Process
+	lastSelector core.Selector
 	restartErr   error
 	restartCalls int
 }
@@ -349,16 +548,20 @@ func (f *fakeProcessManager) ListAll(ctx context.Context) ([]core.Process, error
 	return nil, nil
 }
 
-func (f *fakeProcessManager) Find(ctx context.Context, name string) ([]core.Process, error) {
+// Match is keyed on the selector's resolved value, which for entries built by
+// testWatchEntry is just the entry name.
+func (f *fakeProcessManager) Match(ctx context.Context, sel core.Selector) ([]core.Process, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	queues, ok := f.findQueues[name]
+	f.lastSelector = sel
+
+	queues, ok := f.findQueues[sel.Value]
 	if !ok || len(queues) == 0 {
 		return nil, nil
 	}
 	next := queues[0]
-	f.findQueues[name] = queues[1:]
+	f.findQueues[sel.Value] = queues[1:]
 	return next, nil
 }
 

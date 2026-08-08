@@ -17,6 +17,7 @@ type ReportingConfig struct {
 
 type Config struct {
 	PollIntervalSecs       int             `yaml:"pollIntervalSecs"`
+	ReportIntervalSecs     int             `yaml:"reportIntervalSecs"`
 	RestartVerifyDelaySecs int             `yaml:"restartVerifyDelaySecs"`
 	RestartTimeoutSecs     int             `yaml:"restartTimeoutSecs"`
 	LogLevel               string          `yaml:"logLevel"`
@@ -48,7 +49,8 @@ func Load(path string) (*Config, error) {
 
 func WriteDefault(path string) error {
 	const template = `# ProcessWatch configuration
-pollIntervalSecs: 5
+pollIntervalSecs: 5         # how often to check processes locally
+reportIntervalSecs: 15      # how often to send a heartbeat to the dashboard
 restartVerifyDelaySecs: 3   # seconds to wait after restart before checking health
 restartTimeoutSecs: 60      # kill a recovery command that runs longer than this
 logLevel: info              # info | debug
@@ -65,6 +67,7 @@ logLevel: info              # info | debug
 func defaultConfig() *Config {
 	return &Config{
 		PollIntervalSecs:       5,
+		ReportIntervalSecs:     15,
 		RestartVerifyDelaySecs: 3,
 		RestartTimeoutSecs:     60,
 		LogLevel:               "info",
@@ -80,6 +83,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.PollIntervalSecs == 0 {
 		cfg.PollIntervalSecs = 5
 	}
+	if cfg.ReportIntervalSecs == 0 {
+		cfg.ReportIntervalSecs = 15
+	}
 	if cfg.RestartTimeoutSecs == 0 {
 		cfg.RestartTimeoutSecs = 60
 	}
@@ -91,6 +97,15 @@ func applyDefaults(cfg *Config) {
 func validate(cfg *Config) error {
 	if cfg.PollIntervalSecs < 1 {
 		return fmt.Errorf("invalid pollIntervalSecs %d: must be >= 1", cfg.PollIntervalSecs)
+	}
+	if cfg.ReportIntervalSecs < 1 {
+		return fmt.Errorf("invalid reportIntervalSecs %d: must be >= 1", cfg.ReportIntervalSecs)
+	}
+	// Reporting more often than the state changes only inflates row counts on
+	// the dashboard without telling it anything new.
+	if cfg.ReportIntervalSecs < cfg.PollIntervalSecs {
+		return fmt.Errorf("invalid reportIntervalSecs %d: must be >= pollIntervalSecs (%d)",
+			cfg.ReportIntervalSecs, cfg.PollIntervalSecs)
 	}
 	if cfg.RestartVerifyDelaySecs < 0 {
 		return fmt.Errorf("invalid restartVerifyDelaySecs %d: must be >= 0", cfg.RestartVerifyDelaySecs)

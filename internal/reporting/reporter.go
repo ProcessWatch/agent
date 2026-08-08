@@ -27,16 +27,23 @@ type heartbeatPayload struct {
 	Events    []core.ReportEvent `json:"events"`
 }
 
+// ReportIntervalSecs tells the dashboard how often to expect a heartbeat, so
+// it can decide when a host has gone quiet. It must be the reporting interval,
+// not the local poll interval — those are now different numbers, and sending
+// the faster one would have the dashboard declare healthy hosts down.
 type hostPayload struct {
-	Hostname         string  `json:"hostname"`
-	OS               string  `json:"os"`
-	Arch             string  `json:"arch"`
-	AgentVersion     string  `json:"agentVersion"`
-	CPUPercent       float64 `json:"cpuPercent"`
-	MemPercent       float64 `json:"memPercent"`
-	PollIntervalSecs int     `json:"pollIntervalSecs"`
+	Hostname           string  `json:"hostname"`
+	OS                 string  `json:"os"`
+	Arch               string  `json:"arch"`
+	AgentVersion       string  `json:"agentVersion"`
+	CPUPercent         float64 `json:"cpuPercent"`
+	MemPercent         float64 `json:"memPercent"`
+	ReportIntervalSecs int     `json:"reportIntervalSecs"`
 }
 
+// processPayload deliberately omits the matched process's command line.
+// Command lines routinely carry API keys, database URLs and tokens passed as
+// flags, and the dashboard has no use for them.
 type processPayload struct {
 	Name          string  `json:"name"`
 	PID           int32   `json:"pid"`
@@ -44,6 +51,8 @@ type processPayload struct {
 	CPUPercent    float64 `json:"cpuPercent"`
 	MemMB         float64 `json:"memMB"`
 	UptimeSeconds int64   `json:"uptimeSeconds"`
+	Found         int     `json:"found"`
+	Expected      int     `json:"expected"`
 }
 
 // Reporter sends heartbeat payloads to the ProcessWatch ingest endpoint.
@@ -63,17 +72,17 @@ func NewReporter(apiKey string, hostname string) *Reporter {
 	}
 }
 
-func (r *Reporter) Send(ctx context.Context, statuses []core.WatchStatus, events []core.ReportEvent, cpuPercent float64, memPercent float64, pollIntervalSecs int) error {
+func (r *Reporter) Send(ctx context.Context, statuses []core.WatchStatus, events []core.ReportEvent, cpuPercent float64, memPercent float64, reportIntervalSecs int) error {
 	payload := heartbeatPayload{
 		APIKey: r.apiKey,
 		Host: hostPayload{
-			Hostname:         r.hostname,
-			OS:               runtime.GOOS,
-			Arch:             runtime.GOARCH,
-			AgentVersion:     agentVersion,
-			CPUPercent:       cpuPercent,
-			MemPercent:       memPercent,
-			PollIntervalSecs: pollIntervalSecs,
+			Hostname:           r.hostname,
+			OS:                 runtime.GOOS,
+			Arch:               runtime.GOARCH,
+			AgentVersion:       agentVersion,
+			CPUPercent:         cpuPercent,
+			MemPercent:         memPercent,
+			ReportIntervalSecs: reportIntervalSecs,
 		},
 		Processes: buildProcessPayloads(statuses),
 		Events:    events,
@@ -114,8 +123,10 @@ func buildProcessPayloads(statuses []core.WatchStatus) []processPayload {
 	procs := make([]processPayload, 0, len(statuses))
 	for _, s := range statuses {
 		p := processPayload{
-			Name:   s.Entry.Name,
-			Status: "down",
+			Name:     s.Entry.Name,
+			Status:   "down",
+			Found:    s.Found,
+			Expected: s.Expected,
 		}
 		if s.Running && s.Process != nil {
 			p.PID = s.Process.PID

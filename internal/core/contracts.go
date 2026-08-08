@@ -4,9 +4,9 @@ import "context"
 
 // ProcessManager abstracts OS service control.
 type ProcessManager interface {
-	ListAll(ctx context.Context) ([]Process, error)           // all OS processes
-	Find(ctx context.Context, name string) ([]Process, error) // match by name (may return multiple PIDs)
-	Restart(ctx context.Context, restartCmd string) error     // exec.Command via shell
+	ListAll(ctx context.Context) ([]Process, error)              // all OS processes
+	Match(ctx context.Context, sel Selector) ([]Process, error)  // every process satisfying the selector
+	Restart(ctx context.Context, restartCmd string) error        // exec.Command via shell
 }
 
 // WatchlistManager abstracts watchlist management.

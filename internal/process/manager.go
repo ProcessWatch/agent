@@ -67,24 +67,85 @@ func (pm *ProcessManager) ListAll(ctx context.Context) ([]core.Process, error) {
 	return results, nil
 }
 
-// Find returns all running processes whose name contains the given string
-// (case-insensitive substring match). The match is deliberately loose so
-// hand-edited watchlist entries still work, but it means watching "node"
-// also matches "node_exporter" — watch the most specific name available.
-func (pm *ProcessManager) Find(ctx context.Context, name string) ([]core.Process, error) {
-	all, err := pm.ListAll(ctx)
-	if err != nil {
-		return nil, err
+// Match returns every running process satisfying the selector.
+//
+// Unlike the old name-only Find, this fetches CPU, memory and start time only
+// for processes that actually match, rather than for every process on the box
+// just to filter them afterwards.
+func (pm *ProcessManager) Match(ctx context.Context, sel core.Selector) ([]core.Process, error) {
+	if sel.Mode == core.MatchUnit {
+		return matchUnit(ctx, sel.Value)
 	}
 
-	lower := strings.ToLower(name)
-	var matches []core.Process
-	for _, p := range all {
-		if strings.Contains(strings.ToLower(p.Name), lower) {
-			matches = append(matches, p)
-		}
+	procs, err := gopsprocess.ProcessesWithContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing processes: %w", err)
 	}
+
+	needle := strings.ToLower(sel.Value)
+	var matches []core.Process
+
+	for _, p := range procs {
+		name, err := p.NameWithContext(ctx)
+		if err != nil {
+			continue
+		}
+
+		var cmdline string
+		if sel.Mode == core.MatchCmdline {
+			// Only read the command line when the selector needs it — it is
+			// an extra syscall per process, and sensitive.
+			cmdline, err = p.CmdlineWithContext(ctx)
+			if err != nil {
+				continue
+			}
+		}
+
+		if !selectorMatches(sel.Mode, needle, name, cmdline) {
+			continue
+		}
+
+		proc := pidToProcess(ctx, p, name)
+		proc.Cmdline = cmdline
+		matches = append(matches, proc)
+	}
+
 	return matches, nil
+}
+
+func selectorMatches(mode core.MatchMode, needle, name, cmdline string) bool {
+	switch mode {
+	case core.MatchExact:
+		return strings.EqualFold(name, needle)
+	case core.MatchCmdline:
+		return strings.Contains(strings.ToLower(cmdline), needle)
+	default: // core.MatchSubstring
+		return strings.Contains(strings.ToLower(name), needle)
+	}
+}
+
+func pidToProcess(ctx context.Context, p *gopsprocess.Process, name string) core.Process {
+	cpuPct, _ := p.CPUPercentWithContext(ctx)
+	memInfo, _ := p.MemoryInfoWithContext(ctx)
+
+	var memMB float64
+	if memInfo != nil {
+		memMB = float64(memInfo.RSS) / 1024 / 1024
+	}
+
+	var uptimeSecs int64
+	if created, err := p.CreateTimeWithContext(ctx); err == nil {
+		uptimeSecs = int64(time.Since(time.Unix(created/1000, 0)).Seconds())
+	}
+
+	return core.Process{
+		Name:          name,
+		PID:           p.Pid,
+		State:         "running",
+		CPUPercent:    cpuPct,
+		MemoryMB:      memMB,
+		UptimeSeconds: uptimeSecs,
+	}
 }
 
 // Restart executes restartCmd via the system shell.

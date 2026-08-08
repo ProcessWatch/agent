@@ -75,8 +75,16 @@ func (d statusDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	switch {
 	case s.InCooldown:
 		stateBadge = styleCooldown.Render(fmt.Sprintf("cooldown (%ds)", s.CooldownRemaining))
+	case s.Degraded():
+		// Running, but not at full strength — three workers where four are
+		// expected reads as a warning, not as healthy.
+		stateBadge = styleCooldown.Render(fmt.Sprintf("● %d of %d running", s.Found, s.Expected))
 	case s.Running:
-		stateBadge = styleRunning.Render("● running")
+		if s.Expected > 1 {
+			stateBadge = styleRunning.Render(fmt.Sprintf("● %d of %d running", s.Found, s.Expected))
+		} else {
+			stateBadge = styleRunning.Render("● running")
+		}
 	default:
 		stateBadge = styleStopped.Render("● stopped")
 	}
@@ -265,7 +273,8 @@ func (m ListModel) View() string {
 		if s, ok := m.selectedStatus(); ok {
 			e := s.Entry
 			debugText := fmt.Sprintf(
-				"restartCmd:   %s\nautoRestart:  %v\nmaxRetries:   %d\nfailCount:    %d\nrestartCount: %d\ncooldownSecs: %d\nlastRestart:  %s",
+				"watching:     %s\ninstances:    %d of %d\nrestartCmd:   %s\nautoRestart:  %v\nmaxRetries:   %d\nfailCount:    %d\nrestartCount: %d\ncooldownSecs: %d\nlastRestart:  %s",
+				e.ResolvedSelector(), s.Found, s.Expected,
 				e.RestartCmd, e.AutoRestart, e.MaxRetries,
 				e.FailCount, e.RestartCount, e.CooldownSecs, e.LastRestart,
 			)
